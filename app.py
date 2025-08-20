@@ -6,7 +6,7 @@ import base64
 import time
 import re
 
-# Import Gmail API libraries with error handling
+# Import with robust error handling
 try:
     from googleapiclient.discovery import build
     from google.auth.transport.requests import Request
@@ -14,17 +14,13 @@ try:
     GMAIL_AVAILABLE = True
 except ImportError:
     GMAIL_AVAILABLE = False
-    print("Gmail API not available - running in demo mode")
 
-# Import OpenAI with error handling
 try:
     import openai
     OPENAI_AVAILABLE = True
 except ImportError:
     OPENAI_AVAILABLE = False
-    print("OpenAI not available - using basic classification")
 
-# Import email libraries
 try:
     from email.mime.text import MIMEText
     EMAIL_AVAILABLE = True
@@ -33,252 +29,144 @@ except ImportError:
 
 app = Flask(__name__)
 
-class SafeGmailAssistant:
+class RobustGmailAssistant:
     def __init__(self):
         self.user_email = '22dcs047@charusat.edu.in'
-        self.scopes = [
-            'https://www.googleapis.com/auth/gmail.readonly',
-            'https://www.googleapis.com/auth/gmail.compose',
-            'https://www.googleapis.com/auth/gmail.modify'
-        ]
-        
         self.gmail_service = None
         self.gmail_connected = False
         self.openai_available = False
         
-        # Initialize components safely
-        self._init_openai()
-        self._init_gmail()
+        print("🚀 Initializing Gmail Assistant...")
         
-        print(f"✅ Gmail Assistant initialized")
-        print(f"📧 Gmail: {'Connected' if self.gmail_connected else 'Demo Mode'}")
-        print(f"🧠 OpenAI: {'Available' if self.openai_available else 'Basic Rules'}")
+        # Initialize safely
+        try:
+            self._safe_init_openai()
+            self._safe_init_gmail()
+        except Exception as e:
+            print(f"⚠️ Init error: {e}")
+        
+        print(f"✅ Assistant ready - Gmail: {'Connected' if self.gmail_connected else 'Demo'}, AI: {'Yes' if self.openai_available else 'No'}")
     
-    def _init_openai(self):
-        """Safely initialize OpenAI"""
+    def _safe_init_openai(self):
+        """Initialize OpenAI with timeout protection"""
         if not OPENAI_AVAILABLE:
             return
         
-        api_key = os.getenv('OPENAI_API_KEY')
-        if api_key:
-            try:
+        try:
+            api_key = os.getenv('OPENAI_API_KEY')
+            if api_key and len(api_key) > 20:
                 openai.api_key = api_key
                 self.openai_available = True
-                print("🧠 OpenAI initialized")
-            except Exception as e:
-                print(f"⚠️ OpenAI init failed: {e}")
+                print("🧠 OpenAI ready")
+        except Exception as e:
+            print(f"⚠️ OpenAI error: {e}")
     
-    def _init_gmail(self):
-        """Safely initialize Gmail API"""
+    def _safe_init_gmail(self):
+        """Initialize Gmail with robust error handling"""
         if not GMAIL_AVAILABLE:
+            print("📧 Gmail API not available")
             return
         
         try:
+            # Get credentials with validation
             refresh_token = os.getenv('GMAIL_REFRESH_TOKEN')
             client_id = os.getenv('GMAIL_CLIENT_ID')
             client_secret = os.getenv('GMAIL_CLIENT_SECRET')
             
-            if not all([refresh_token, client_id, client_secret]):
+            if not refresh_token or not client_id or not client_secret:
                 print("⚠️ Gmail credentials missing")
                 return
             
+            if len(refresh_token) < 50 or len(client_id) < 30:
+                print("⚠️ Gmail credentials appear invalid")
+                return
+            
+            # Build credentials
             token_data = {
                 'refresh_token': refresh_token,
                 'client_id': client_id,
                 'client_secret': client_secret,
                 'token_uri': 'https://oauth2.googleapis.com/token',
-                'scopes': self.scopes
+                'scopes': [
+                    'https://www.googleapis.com/auth/gmail.readonly',
+                    'https://www.googleapis.com/auth/gmail.compose',
+                    'https://www.googleapis.com/auth/gmail.modify'
+                ]
             }
             
-            creds = Credentials.from_authorized_user_info(token_data, self.scopes)
+            creds = Credentials.from_authorized_user_info(token_data, token_data['scopes'])
             
+            # Refresh if needed
             if creds and creds.expired and creds.refresh_token:
+                print("🔄 Refreshing Gmail token...")
                 creds.refresh(Request())
+                print("✅ Token refreshed")
             
+            # Test connection
             if creds and creds.valid:
-                self.gmail_service = build('gmail', 'v1', credentials=creds)
+                self.gmail_service = build('gmail', 'v1', credentials=creds, cache_discovery=False)
+                
+                # Quick test
                 profile = self.gmail_service.users().getProfile(userId='me').execute()
+                email_address = profile.get('emailAddress', 'Unknown')
+                
                 self.gmail_connected = True
-                print(f"✅ Gmail connected: {profile.get('emailAddress')}")
-            
-        except Exception as e:
-            print(f"⚠️ Gmail init failed: {e}")
-    
-    def classify_email(self, subject, body, sender):
-        """Classify email with fallback logic"""
-        try:
-            if self.openai_available:
-                return self._ai_classify(subject, body, sender)
+                print(f"✅ Gmail connected: {email_address}")
             else:
-                return self._rule_classify(subject, body, sender)
-        except Exception as e:
-            print(f"Classification error: {e}")
-            return self._safe_classify(subject, sender)
-    
-    def _ai_classify(self, subject, body, sender):
-        """AI-powered classification"""
-        try:
-            prompt = f"""Classify this email strictly:
-
-Subject: {subject}
-From: {sender}
-Content: {body[:300]}
-
-Rules:
-- CRITICAL: Life-threatening, immediate security breaches
-- HIGH: Deadlines, registrations, meetings, interviews
-- MEDIUM: Announcements, course updates, reminders
-- LOW: Promotional, automated, newsletters
-
-If sender has "noreply" or promotional indicators, classify as LOW unless security-related.
-
-Return JSON: {{"priority": "high/medium/low/critical", "type": "academic/promotional/security/general", "reason": "explanation"}}"""
-
-            response = openai.ChatCompletion.create(
-                model="gpt-3.5-turbo",
-                messages=[{"role": "user", "content": prompt}],
-                max_tokens=150,
-                temperature=0.1
-            )
-            
-            result = json.loads(response.choices[0].message.content.strip())
-            result['ai_classified'] = True
-            return result
-            
-        except Exception as e:
-            print(f"AI classification error: {e}")
-            return self._rule_classify(subject, body, sender)
-    
-    def _rule_classify(self, subject, body, sender):
-        """Rule-based classification"""
-        subject_lower = subject.lower()
-        sender_lower = sender.lower()
-        
-        # Check for promotional first
-        promotional_indicators = ['noreply', 'no-reply', 'unsubscribe', 'newsletter', 'marketing']
-        is_promotional = any(indicator in sender_lower for indicator in promotional_indicators)
-        
-        if is_promotional:
-            # Check if it's a security exception
-            if any(word in subject_lower for word in ['security', 'alert', 'breach']):
-                return {
-                    'priority': 'high',
-                    'type': 'security',
-                    'reason': 'Security alert from automated system',
-                    'ai_classified': False
-                }
-            return {
-                'priority': 'low',
-                'type': 'promotional',
-                'reason': 'Promotional/automated email',
-                'ai_classified': False
-            }
-        
-        # High priority keywords
-        high_keywords = ['deadline', 'urgent', 'registration', 'interview', 'meeting']
-        if any(keyword in subject_lower for keyword in high_keywords):
-            return {
-                'priority': 'high',
-                'type': 'academic' if '@charusat.edu.in' in sender else 'general',
-                'reason': 'Contains high priority keywords',
-                'ai_classified': False
-            }
-        
-        # Medium priority for academic emails
-        if '@charusat.edu.in' in sender or 'academic' in subject_lower:
-            return {
-                'priority': 'medium',
-                'type': 'academic',
-                'reason': 'Academic institution email',
-                'ai_classified': False
-            }
-        
-        # Default low priority
-        return {
-            'priority': 'low',
-            'type': 'general',
-            'reason': 'Default classification',
-            'ai_classified': False
-        }
-    
-    def _safe_classify(self, subject, sender):
-        """Safe fallback classification"""
-        return {
-            'priority': 'medium',
-            'type': 'general',
-            'reason': 'Safe fallback classification',
-            'ai_classified': False
-        }
-    
-    def create_smart_summary(self, subject, snippet, body):
-        """Create intelligent summary"""
-        try:
-            # Use snippet first, then body
-            text = snippet if snippet else body
-            if not text:
-                return "No preview available"
-            
-            # Clean text
-            text = re.sub(r'<[^>]+>', '', text)  # Remove HTML
-            text = re.sub(r'\s+', ' ', text).strip()  # Normalize spaces
-            
-            # Remove common footers
-            footers = ['Thanks and Regards', 'Best regards', 'You received this message']
-            for footer in footers:
-                if footer in text:
-                    text = text.split(footer)[0].strip()
-            
-            subject_lower = subject.lower()
-            
-            # Create contextual summaries
-            if 'deadline' in subject_lower:
-                return f"⏰ Registration deadline notice - {text[:60]}..."
-            elif 'meeting' in subject_lower:
-                return f"📅 Meeting invitation - {text[:60]}..."
-            elif 'security' in subject_lower:
-                return f"🔒 Security notification - {text[:60]}..."
-            elif any(word in subject_lower for word in ['opportunity', 'job']):
-                return f"💼 Career opportunity - {text[:60]}..."
-            else:
-                # Extract meaningful sentence
-                sentences = [s.strip() for s in text.split('.') if len(s.strip()) > 15]
-                if sentences:
-                    return sentences[0][:80] + "..." if len(sentences[0]) > 80 else sentences[0]
-                return text[:80] + "..." if len(text) > 80 else text
+                print("❌ Gmail credentials invalid")
                 
         except Exception as e:
-            print(f"Summary error: {e}")
-            return snippet[:80] + "..." if snippet else "Preview unavailable"
+            print(f"❌ Gmail init error: {e}")
+            self.gmail_connected = False
     
-    def get_emails(self):
-        """Get emails safely"""
+    def get_emails_with_timeout(self):
+        """Get emails with robust timeout handling"""
         if not self.gmail_connected:
+            print("📧 Using demo emails")
             return self.get_demo_emails()
         
         try:
+            print("📨 Fetching real emails...")
+            
+            # Quick query with timeout protection
             three_days_ago = (datetime.now() - timedelta(days=3)).strftime('%Y/%m/%d')
             query = f'is:unread after:{three_days_ago} -from:me'
             
+            # Get message list first (fast operation)
             result = self.gmail_service.users().messages().list(
-                userId='me', q=query, maxResults=20
+                userId='me', 
+                q=query, 
+                maxResults=10  # Reduced for reliability
             ).execute()
             
             messages = result.get('messages', [])
-            emails = []
+            print(f"📊 Found {len(messages)} messages")
             
-            for message in messages[:15]:  # Limit to 15 for safety
+            if not messages:
+                print("📭 No unread emails found")
+                return self.get_demo_emails()
+            
+            emails = []
+            processed = 0
+            
+            # Process emails with timeout protection
+            for message in messages[:8]:  # Limit to 8 for Vercel timeout
                 try:
+                    # Get message details
                     msg = self.gmail_service.users().messages().get(
-                        userId='me', id=message['id'], format='full'
+                        userId='me', 
+                        id=message['id'], 
+                        format='metadata',  # Faster than 'full'
+                        metadataHeaders=['Subject', 'From', 'To', 'Date']
                     ).execute()
                     
-                    headers = msg['payload'].get('headers', [])
-                    subject = next((h['value'] for h in headers if h['name'] == 'Subject'), 'No Subject')
-                    from_email = next((h['value'] for h in headers if h['name'] == 'From'), 'Unknown')
-                    to_field = next((h['value'] for h in headers if h['name'] == 'To'), '')
+                    # Extract headers safely
+                    headers = msg.get('payload', {}).get('headers', [])
+                    subject = self._get_header(headers, 'Subject') or 'No Subject'
+                    from_email = self._get_header(headers, 'From') or 'Unknown'
+                    to_field = self._get_header(headers, 'To') or ''
                     
                     snippet = msg.get('snippet', '')
-                    body = self._extract_body(msg['payload'])
                     
                     # Parse date
                     try:
@@ -289,9 +177,9 @@ Return JSON: {{"priority": "high/medium/low/critical", "type": "academic/promoti
                         date_str = datetime.now().strftime('%Y-%m-%d')
                         time_str = datetime.now().strftime('%H:%M')
                     
-                    # Classify and summarize
-                    classification = self.classify_email(subject, body, from_email)
-                    summary = self.create_smart_summary(subject, snippet, body)
+                    # Fast classification
+                    classification = self._fast_classify(subject, snippet, from_email)
+                    summary = self._create_summary(subject, snippet)
                     
                     emails.append({
                         'id': message['id'],
@@ -300,42 +188,120 @@ Return JSON: {{"priority": "high/medium/low/critical", "type": "academic/promoti
                         'to_field': to_field,
                         'snippet': snippet,
                         'display_snippet': summary,
-                        'body': body,
+                        'body': snippet,  # Use snippet as body for speed
                         'date': date_str,
                         'time': time_str,
                         'priority': classification['priority'],
                         'email_type': classification['type'],
                         'urgency_reason': classification['reason'],
-                        'ai_classified': classification['ai_classified']
+                        'ai_classified': classification.get('ai_classified', False)
                     })
                     
+                    processed += 1
+                    
+                    # Stop if taking too long
+                    if processed >= 8:
+                        break
+                        
                 except Exception as e:
-                    print(f"Error processing email: {e}")
+                    print(f"⚠️ Error processing email: {e}")
                     continue
             
-            return emails
+            print(f"✅ Processed {len(emails)} emails successfully")
+            return emails if emails else self.get_demo_emails()
             
         except Exception as e:
-            print(f"Error fetching emails: {e}")
+            print(f"❌ Error fetching emails: {e}")
             return self.get_demo_emails()
     
-    def _extract_body(self, payload):
-        """Extract email body safely"""
+    def _get_header(self, headers, name):
+        """Safely get header value"""
+        for header in headers:
+            if header.get('name') == name:
+                return header.get('value', '')
+        return ''
+    
+    def _fast_classify(self, subject, snippet, sender):
+        """Fast rule-based classification"""
         try:
-            body = ""
-            if 'parts' in payload:
-                for part in payload['parts']:
-                    if part['mimeType'] == 'text/plain':
-                        data = part['body']['data']
-                        body = base64.urlsafe_b64decode(data).decode('utf-8')
-                        break
-            elif payload['mimeType'] == 'text/plain':
-                data = payload['body']['data']
-                body = base64.urlsafe_b64decode(data).decode('utf-8')
-            return body.strip()
+            subject_lower = subject.lower()
+            sender_lower = sender.lower()
+            content_lower = snippet.lower()
+            
+            # Check promotional first
+            promotional_indicators = ['noreply', 'no-reply', 'unsubscribe', 'newsletter', 'marketing', 'automated']
+            is_promotional = any(indicator in sender_lower for indicator in promotional_indicators)
+            
+            if is_promotional:
+                # Security exception
+                if any(word in subject_lower for word in ['security', 'alert', 'breach', 'suspicious']):
+                    return {
+                        'priority': 'high',
+                        'type': 'security',
+                        'reason': 'Security alert from automated system'
+                    }
+                return {
+                    'priority': 'low',
+                    'type': 'promotional',
+                    'reason': 'Promotional/automated email'
+                }
+            
+            # High priority detection
+            high_indicators = ['deadline', 'urgent', 'registration', 'interview', 'meeting', 'due', 'expires', 'last day']
+            if any(indicator in subject_lower for indicator in high_indicators):
+                return {
+                    'priority': 'high',
+                    'type': 'academic' if '@charusat.edu.in' in sender else 'general',
+                    'reason': 'Contains deadline/urgent keywords in subject'
+                }
+            
+            # Medium priority for academic
+            if '@charusat.edu.in' in sender or 'charusat' in sender_lower:
+                return {
+                    'priority': 'medium',
+                    'type': 'academic',
+                    'reason': 'Email from academic institution'
+                }
+            
+            # Default classification
+            return {
+                'priority': 'low',
+                'type': 'general',
+                'reason': 'Default classification'
+            }
+            
         except Exception as e:
-            print(f"Body extraction error: {e}")
-            return ""
+            print(f"⚠️ Classification error: {e}")
+            return {
+                'priority': 'medium',
+                'type': 'general',
+                'reason': 'Fallback classification'
+            }
+    
+    def _create_summary(self, subject, snippet):
+        """Create smart summary quickly"""
+        try:
+            subject_lower = subject.lower()
+            
+            # Clean snippet
+            text = snippet or "No preview available"
+            text = re.sub(r'\s+', ' ', text).strip()
+            
+            # Contextual summaries
+            if 'deadline' in subject_lower:
+                return f"⏰ Registration deadline notice - {text[:60]}..."
+            elif 'meeting' in subject_lower:
+                return f"📅 Meeting invitation - {text[:60]}..."
+            elif 'security' in subject_lower:
+                return f"🔒 Security notification - {text[:60]}..."
+            elif any(word in subject_lower for word in ['opportunity', 'job', 'internship']):
+                return f"💼 Career opportunity - {text[:60]}..."
+            else:
+                return text[:80] + "..." if len(text) > 80 else text
+                
+        except Exception as e:
+            print(f"⚠️ Summary error: {e}")
+            return snippet[:80] + "..." if snippet else "Preview unavailable"
     
     def get_demo_emails(self):
         """Demo emails for testing"""
@@ -344,79 +310,119 @@ Return JSON: {{"priority": "high/medium/low/critical", "type": "academic/promoti
             {
                 'id': 'demo_1',
                 'subject': 'July 2025 Exam Registration Deadline - Aug 22, 2025 - 5:00 PM [12 week courses] – Last 3 days to Register!',
-                'from_email': 'NPTEL',
+                'from_email': 'NPTEL <noreply@nptel.iitm.ac.in>',
                 'to_field': '22dcs047@charusat.edu.in',
-                'snippet': 'Registration deadline for July 2025 exam approaching',
+                'snippet': 'This is a final reminder about the exam registration deadline approaching on August 22, 2025.',
                 'display_snippet': '⏰ Registration deadline notice - Last 3 days to register for July 2025 Exam',
-                'body': 'This is a reminder about the exam registration deadline.',
+                'body': 'This is a final reminder about the exam registration deadline approaching on August 22, 2025.',
                 'date': now.strftime('%Y-%m-%d'),
                 'time': now.strftime('%H:%M'),
                 'priority': 'high',
                 'email_type': 'academic',
-                'urgency_reason': 'Contains deadline keywords',
+                'urgency_reason': 'Contains deadline/urgent keywords in subject',
                 'ai_classified': False
             },
             {
                 'id': 'demo_2',
                 'subject': 'Course Announcement - New Materials Available',
-                'from_email': 'professor@charusat.edu.in',
+                'from_email': 'Academic Office <academic@charusat.edu.in>',
                 'to_field': '22dcs047@charusat.edu.in',
-                'snippet': 'New course materials have been uploaded',
-                'display_snippet': 'New course materials have been uploaded to the portal',
-                'body': 'Dear students, new course materials are now available.',
+                'snippet': 'New course materials have been uploaded to the portal for your reference.',
+                'display_snippet': 'New course materials have been uploaded to the portal for your reference.',
+                'body': 'Dear students, new course materials are now available on the portal.',
                 'date': now.strftime('%Y-%m-%d'),
                 'time': (now - timedelta(hours=2)).strftime('%H:%M'),
                 'priority': 'medium',
                 'email_type': 'academic',
-                'urgency_reason': 'Academic institution email',
+                'urgency_reason': 'Email from academic institution',
                 'ai_classified': False
             }
         ]
     
-    def get_stats(self):
-        """Get email statistics"""
-        emails = self.get_emails()
-        
-        # Count direct emails
-        direct_emails = [e for e in emails if self.user_email in e.get('to_field', '')]
-        high_priority = [e for e in emails if e['priority'] in ['high', 'critical']]
-        
-        return {
-            'all_emails': emails,
-            'direct_emails': direct_emails,
-            'stats': {
-                'total_unread': len(emails),
-                'direct_count': len(direct_emails),
-                'high_priority_count': len(high_priority),
-                'medium_priority_count': len([e for e in emails if e['priority'] == 'medium']),
-                'low_priority_count': len([e for e in emails if e['priority'] == 'low'])
-            },
-            'gmail_connected': self.gmail_connected,
-            'openai_connected': self.openai_available,
-            'last_updated': datetime.now().isoformat()
-        }
+    def get_stats_safe(self):
+        """Get statistics safely"""
+        try:
+            emails = self.get_emails_with_timeout()
+            
+            # Count safely
+            direct_emails = []
+            high_priority = []
+            medium_priority = []
+            low_priority = []
+            
+            for email in emails:
+                try:
+                    # Direct email check
+                    if self.user_email in email.get('to_field', ''):
+                        direct_emails.append(email)
+                    
+                    # Priority counts
+                    priority = email.get('priority', 'low')
+                    if priority in ['high', 'critical']:
+                        high_priority.append(email)
+                    elif priority == 'medium':
+                        medium_priority.append(email)
+                    else:
+                        low_priority.append(email)
+                except:
+                    continue
+            
+            return {
+                'all_emails': emails,
+                'direct_emails': direct_emails,
+                'stats': {
+                    'total_unread': len(emails),
+                    'direct_count': len(direct_emails),
+                    'high_priority_count': len(high_priority),
+                    'medium_priority_count': len(medium_priority),
+                    'low_priority_count': len(low_priority)
+                },
+                'gmail_connected': self.gmail_connected,
+                'openai_connected': self.openai_available,
+                'last_updated': datetime.now().isoformat()
+            }
+            
+        except Exception as e:
+            print(f"❌ Stats error: {e}")
+            # Return safe fallback
+            demo_emails = self.get_demo_emails()
+            return {
+                'all_emails': demo_emails,
+                'direct_emails': demo_emails,
+                'stats': {
+                    'total_unread': len(demo_emails),
+                    'direct_count': len(demo_emails),
+                    'high_priority_count': 1,
+                    'medium_priority_count': 1,
+                    'low_priority_count': 0
+                },
+                'gmail_connected': False,
+                'openai_connected': False,
+                'last_updated': datetime.now().isoformat()
+            }
     
-    def create_draft(self, email_data):
-        """Create Gmail draft safely"""
+    def create_draft_safe(self, email_data):
+        """Create draft with error handling"""
         if not self.gmail_connected or not EMAIL_AVAILABLE:
-            return False, "Draft creation not available"
+            return False, "Draft creation not available in demo mode"
         
         try:
-            reply_body = f"""Thank you for your email regarding "{email_data['subject']}".
+            # Create simple reply
+            reply_body = f"""Thank you for your email regarding "{email_data.get('subject', 'your message')}".
 
-I have received your message and will respond appropriately based on the priority level.
+I have received your message and will respond appropriately.
 
 Best regards,
 Jai Mehtani
-Computer Science Student & Developer
+Computer Science Student
 Charusat University
 📧 22dcs047@charusat.edu.in
 
 🤖 This is an automated acknowledgment."""
             
             message = MIMEText(reply_body)
-            message['to'] = email_data['from_email']
-            message['subject'] = f"Re: {email_data['subject']}"
+            message['to'] = email_data.get('from_email', '')
+            message['subject'] = f"Re: {email_data.get('subject', 'Your Email')}"
             
             draft = {
                 'message': {
@@ -428,17 +434,24 @@ Charusat University
                 userId='me', body=draft
             ).execute()
             
-            return True, f"Draft created successfully"
+            return True, "Draft created successfully"
             
         except Exception as e:
-            print(f"Draft creation error: {e}")
+            print(f"❌ Draft error: {e}")
             return False, f"Error creating draft: {str(e)}"
 
-# Initialize assistant
-assistant = SafeGmailAssistant()
+# Initialize with error protection
+try:
+    assistant = RobustGmailAssistant()
+except Exception as e:
+    print(f"❌ Failed to initialize assistant: {e}")
+    assistant = None
 
 @app.route('/')
 def home():
+    if not assistant:
+        return "Assistant initialization failed", 500
+        
     status = "Real Gmail" if assistant.gmail_connected else "Demo Mode"
     return f'''<!DOCTYPE html>
 <html>
@@ -454,11 +467,7 @@ def home():
             min-height: 100vh; 
             color: #ffffff; 
         }}
-        .container {{ 
-            max-width: 1200px; 
-            margin: 0 auto; 
-            padding: 40px 20px; 
-        }}
+        .container {{ max-width: 1200px; margin: 0 auto; padding: 40px 20px; }}
         .hero {{ 
             background: rgba(255,255,255,0.95); 
             padding: 60px 40px; 
@@ -468,90 +477,26 @@ def home():
             color: #1f2937;
             margin-bottom: 40px;
         }}
-        .hero h1 {{ 
-            font-size: 3.5rem; 
-            margin-bottom: 20px; 
-            font-weight: 800; 
-            color: #1f2937;
-        }}
-        .hero p {{ 
-            font-size: 1.3rem; 
-            margin-bottom: 30px; 
-            color: #4b5563;
-            line-height: 1.6;
-        }}
+        .hero h1 {{ font-size: 3.5rem; margin-bottom: 20px; font-weight: 800; color: #1f2937; }}
+        .hero p {{ font-size: 1.3rem; margin-bottom: 30px; color: #4b5563; line-height: 1.6; }}
         .btn {{ 
             background: linear-gradient(135deg, #3b82f6, #1e40af);
-            color: white; 
-            padding: 15px 30px; 
-            border: none; 
-            border-radius: 10px; 
-            font-size: 1.1rem; 
-            font-weight: 600; 
-            text-decoration: none; 
-            display: inline-block; 
-            margin: 10px 15px; 
-            transition: all 0.3s ease; 
+            color: white; padding: 15px 30px; border: none; border-radius: 10px; 
+            font-size: 1.1rem; font-weight: 600; text-decoration: none; 
+            display: inline-block; margin: 10px 15px; transition: all 0.3s ease; 
             box-shadow: 0 4px 15px rgba(59,130,246,0.3);
         }}
-        .btn:hover {{ 
-            transform: translateY(-2px); 
-            box-shadow: 0 8px 25px rgba(59,130,246,0.4); 
-        }}
-        .btn.primary {{
-            background: linear-gradient(135deg, #059669, #047857);
-            box-shadow: 0 4px 15px rgba(5,150,105,0.3);
-        }}
+        .btn:hover {{ transform: translateY(-2px); box-shadow: 0 8px 25px rgba(59,130,246,0.4); }}
+        .btn.primary {{ background: linear-gradient(135deg, #059669, #047857); box-shadow: 0 4px 15px rgba(5,150,105,0.3); }}
         .status-badge {{ 
             background: linear-gradient(135deg, #{'059669, #047857' if assistant.gmail_connected else 'dc2626, #b91c1c'}); 
-            color: white; 
-            padding: 12px 24px; 
-            border-radius: 25px; 
-            font-weight: 600; 
-            margin: 10px; 
-            display: inline-block; 
+            color: white; padding: 12px 24px; border-radius: 25px; font-weight: 600; 
+            margin: 10px; display: inline-block; 
             box-shadow: 0 4px 15px rgba({'5,150,105' if assistant.gmail_connected else '220,38,38'},0.3);
         }}
-        .features {{
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-            gap: 30px;
-            margin-top: 40px;
-        }}
-        .feature-card {{
-            background: rgba(255,255,255,0.95);
-            padding: 30px;
-            border-radius: 15px;
-            box-shadow: 0 10px 30px rgba(0,0,0,0.1);
-            color: #1f2937;
-            transition: all 0.3s ease;
-        }}
-        .feature-card:hover {{
-            transform: translateY(-5px);
-            box-shadow: 0 20px 40px rgba(0,0,0,0.15);
-        }}
-        .feature-icon {{
-            font-size: 3rem;
-            margin-bottom: 20px;
-            color: #3b82f6;
-        }}
-        .status-grid {{
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-            gap: 20px;
-            margin: 30px 0;
-        }}
-        .status-item {{
-            background: rgba(255,255,255,0.1);
-            padding: 20px;
-            border-radius: 10px;
-            text-align: center;
-        }}
-        .status-item strong {{
-            display: block;
-            font-size: 1.2rem;
-            margin-top: 5px;
-        }}
+        .status-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px; margin: 30px 0; }}
+        .status-item {{ background: rgba(255,255,255,0.1); padding: 20px; border-radius: 10px; text-align: center; }}
+        .status-item strong {{ display: block; font-size: 1.2rem; margin-top: 5px; }}
     </style>
 </head>
 <body>
@@ -562,7 +507,7 @@ def home():
                 {status.upper()} 
             </div>
             <h1><i class="fas fa-brain"></i> AI Gmail Assistant</h1>
-            <p>{'Intelligent email management with real Gmail integration and smart priority detection' if assistant.gmail_connected else 'Demo mode - All features working with sample data'}</p>
+            <p>{'Intelligent email management with real Gmail integration and smart priority detection' if assistant.gmail_connected else 'Demo mode - All features working with sample data for testing'}</p>
             
             <div class="status-grid">
                 <div class="status-item">
@@ -581,24 +526,6 @@ def home():
             
             <a href="/dashboard" class="btn primary"><i class="fas fa-tachometer-alt"></i> Open Dashboard</a>
             <a href="/debug" class="btn"><i class="fas fa-cog"></i> System Info</a>
-        </div>
-        
-        <div class="features">
-            <div class="feature-card">
-                <div class="feature-icon"><i class="fas fa-envelope-open-text"></i></div>
-                <h3>Smart Email Classification</h3>
-                <p>Advanced priority detection that correctly identifies important emails while filtering out promotional content with intelligent summary generation.</p>
-            </div>
-            <div class="feature-card">
-                <div class="feature-icon"><i class="fas fa-robot"></i></div>
-                <h3>AI-Powered Features</h3>
-                <p>Optional OpenAI integration for enhanced classification, with robust rule-based fallbacks ensuring reliable operation.</p>
-            </div>
-            <div class="feature-card">
-                <div class="feature-icon"><i class="fas fa-magic"></i></div>
-                <h3>Draft Generation</h3>
-                <p>Automatic draft creation for high-priority emails with professional formatting and contextual responses.</p>
-            </div>
         </div>
     </div>
 </body>
@@ -620,265 +547,107 @@ def dashboard():
             min-height: 100vh; 
             color: #1f2937; 
         }
-        
         .container { max-width: 1400px; margin: 0 auto; padding: 20px; }
-        
         .header {
             background: rgba(255,255,255,0.95);
-            padding: 30px;
-            border-radius: 15px;
-            margin-bottom: 30px;
+            padding: 30px; border-radius: 15px; margin-bottom: 30px;
             box-shadow: 0 10px 30px rgba(0,0,0,0.1);
         }
-        
-        .header h1 {
-            font-size: 2.5rem;
-            font-weight: 800;
-            color: #1f2937;
-            margin-bottom: 10px;
-        }
-        
+        .header h1 { font-size: 2.5rem; font-weight: 800; color: #1f2937; margin-bottom: 10px; }
         .status-indicator {
             background: linear-gradient(135deg, #059669, #047857);
-            color: white;
-            padding: 8px 20px;
-            border-radius: 20px;
-            font-weight: 600;
-            display: inline-block;
-            font-size: 0.9rem;
+            color: white; padding: 8px 20px; border-radius: 20px;
+            font-weight: 600; display: inline-block; font-size: 0.9rem;
         }
-        
         .stats-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
-            gap: 20px;
-            margin-bottom: 40px;
+            display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 20px; margin-bottom: 40px;
         }
-        
         .stat-card {
-            background: rgba(255,255,255,0.95);
-            padding: 30px;
-            border-radius: 15px;
-            text-align: center;
-            transition: all 0.3s ease;
+            background: rgba(255,255,255,0.95); padding: 30px; border-radius: 15px;
+            text-align: center; transition: all 0.3s ease;
             box-shadow: 0 5px 20px rgba(0,0,0,0.1);
             border-left: 4px solid var(--accent-color);
         }
-        
-        .stat-card:hover { 
-            transform: translateY(-5px); 
-            box-shadow: 0 15px 35px rgba(0,0,0,0.15); 
-        }
-        
-        .stat-number {
-            font-size: 3rem;
-            font-weight: 800;
-            margin-bottom: 10px;
-            color: var(--accent-color);
-        }
-        
-        .stat-label { 
-            font-size: 1.1rem; 
-            font-weight: 600; 
-            color: #4b5563;
-        }
-        
+        .stat-card:hover { transform: translateY(-5px); box-shadow: 0 15px 35px rgba(0,0,0,0.15); }
+        .stat-number { font-size: 3rem; font-weight: 800; margin-bottom: 10px; color: var(--accent-color); }
+        .stat-label { font-size: 1.1rem; font-weight: 600; color: #4b5563; }
         .stat-card.total { --accent-color: #3b82f6; }
         .stat-card.direct { --accent-color: #8b5cf6; }
         .stat-card.high { --accent-color: #ef4444; }
-        
-        .main-action {
-            text-align: center;
-            margin: 40px 0;
-        }
-        
+        .main-action { text-align: center; margin: 40px 0; }
         .create-drafts-btn {
             background: linear-gradient(135deg, #ef4444, #dc2626);
-            color: white;
-            padding: 18px 40px;
-            border: none;
-            border-radius: 12px;
-            font-size: 1.2rem;
-            font-weight: 700;
-            text-decoration: none;
-            display: inline-block;
-            transition: all 0.3s ease;
+            color: white; padding: 18px 40px; border: none; border-radius: 12px;
+            font-size: 1.2rem; font-weight: 700; text-decoration: none;
+            display: inline-block; transition: all 0.3s ease;
             box-shadow: 0 8px 25px rgba(239,68,68,0.3);
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-            cursor: pointer;
+            text-transform: uppercase; letter-spacing: 0.5px; cursor: pointer;
         }
-        
-        .create-drafts-btn:hover { 
-            transform: translateY(-3px); 
-            box-shadow: 0 15px 35px rgba(239,68,68,0.4); 
-        }
-        
+        .create-drafts-btn:hover { transform: translateY(-3px); box-shadow: 0 15px 35px rgba(239,68,68,0.4); }
         .refresh-btn {
             background: linear-gradient(135deg, #3b82f6, #1e40af);
-            color: white;
-            padding: 10px 20px;
-            border: none;
-            border-radius: 8px;
-            font-weight: 600;
-            cursor: pointer;
-            transition: all 0.3s ease;
-            margin-left: 15px;
+            color: white; padding: 10px 20px; border: none; border-radius: 8px;
+            font-weight: 600; cursor: pointer; transition: all 0.3s ease; margin-left: 15px;
         }
-        
         .emails-section {
-            background: rgba(255,255,255,0.95);
-            padding: 30px;
-            border-radius: 15px;
+            background: rgba(255,255,255,0.95); padding: 30px; border-radius: 15px;
             box-shadow: 0 10px 30px rgba(0,0,0,0.1);
         }
-        
         .section-title {
-            font-size: 1.8rem;
-            font-weight: 700;
-            margin-bottom: 25px;
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            color: #1f2937;
+            font-size: 1.8rem; font-weight: 700; margin-bottom: 25px;
+            display: flex; align-items: center; gap: 10px; color: #1f2937;
         }
-        
         .email-card {
-            background: #ffffff;
-            margin-bottom: 20px;
-            padding: 25px;
-            border-radius: 12px;
-            border-left: 4px solid var(--priority-color);
-            transition: all 0.3s ease;
-            box-shadow: 0 3px 10px rgba(0,0,0,0.05);
-            cursor: pointer;
+            background: #ffffff; margin-bottom: 20px; padding: 25px; border-radius: 12px;
+            border-left: 4px solid var(--priority-color); transition: all 0.3s ease;
+            box-shadow: 0 3px 10px rgba(0,0,0,0.05); cursor: pointer;
         }
-        
-        .email-card:hover {
-            transform: translateX(5px);
-            box-shadow: 0 8px 25px rgba(0,0,0,0.1);
-        }
-        
+        .email-card:hover { transform: translateX(5px); box-shadow: 0 8px 25px rgba(0,0,0,0.1); }
         .email-card.critical { --priority-color: #dc2626; }
         .email-card.high { --priority-color: #ea580c; }
         .email-card.medium { --priority-color: #ca8a04; }
         .email-card.low { --priority-color: #059669; }
-        
         .email-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: flex-start;
-            margin-bottom: 15px;
-            flex-wrap: wrap;
-            gap: 10px;
+            display: flex; justify-content: space-between; align-items: flex-start;
+            margin-bottom: 15px; flex-wrap: wrap; gap: 10px;
         }
-        
-        .email-subject {
-            font-size: 1.2rem;
-            font-weight: 700;
-            color: #1f2937;
-            flex: 1;
-            min-width: 200px;
-        }
-        
+        .email-subject { font-size: 1.2rem; font-weight: 700; color: #1f2937; flex: 1; min-width: 200px; }
         .priority-badge {
-            background: var(--priority-color);
-            color: white;
-            padding: 6px 12px;
-            border-radius: 20px;
-            font-weight: 600;
-            font-size: 0.85rem;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
+            background: var(--priority-color); color: white; padding: 6px 12px; border-radius: 20px;
+            font-weight: 600; font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.5px;
         }
-        
         .email-meta {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-            gap: 10px;
-            margin-bottom: 15px;
-            color: #6b7280;
-            font-size: 0.9rem;
+            display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 10px; margin-bottom: 15px; color: #6b7280; font-size: 0.9rem;
         }
-        
-        .meta-item {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-        }
-        
-        .meta-item i {
-            color: var(--priority-color);
-            width: 14px;
-        }
-        
+        .meta-item { display: flex; align-items: center; gap: 8px; }
+        .meta-item i { color: var(--priority-color); width: 14px; }
         .email-snippet {
-            background: #f8fafc;
-            padding: 15px;
-            border-radius: 8px;
-            margin: 15px 0;
-            color: #4b5563;
-            line-height: 1.5;
-            border-left: 3px solid var(--priority-color);
+            background: #f8fafc; padding: 15px; border-radius: 8px; margin: 15px 0;
+            color: #4b5563; line-height: 1.5; border-left: 3px solid var(--priority-color);
         }
-        
         .draft-btn {
             background: linear-gradient(135deg, var(--priority-color), var(--priority-color));
-            color: white;
-            padding: 10px 20px;
-            border: none;
-            border-radius: 8px;
-            font-weight: 600;
-            cursor: pointer;
-            transition: all 0.3s ease;
-            margin-top: 10px;
-            font-size: 0.9rem;
+            color: white; padding: 10px 20px; border: none; border-radius: 8px;
+            font-weight: 600; cursor: pointer; transition: all 0.3s ease;
+            margin-top: 10px; font-size: 0.9rem;
         }
-        
-        .draft-btn:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 5px 15px rgba(0,0,0,0.2);
-        }
-        
-        .loading {
-            text-align: center;
-            padding: 40px;
-            color: #6b7280;
-        }
-        
+        .draft-btn:hover { transform: translateY(-2px); box-shadow: 0 5px 15px rgba(0,0,0,0.2); }
+        .loading { text-align: center; padding: 40px; color: #6b7280; }
         .spinner {
-            border: 3px solid #e5e7eb;
-            border-radius: 50%;
-            border-top: 3px solid #3b82f6;
-            width: 40px;
-            height: 40px;
-            animation: spin 1s linear infinite;
-            margin: 20px auto;
+            border: 3px solid #e5e7eb; border-radius: 50%; border-top: 3px solid #3b82f6;
+            width: 40px; height: 40px; animation: spin 1s linear infinite; margin: 20px auto;
         }
-        
-        @keyframes spin {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
-        }
-        
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
         .notification {
-            position: fixed;
-            top: 20px;
-            right: 20px;
-            background: #10b981;
-            color: white;
-            padding: 15px 25px;
-            border-radius: 10px;
-            box-shadow: 0 10px 25px rgba(0,0,0,0.1);
-            transform: translateX(400px);
-            transition: transform 0.3s ease;
-            z-index: 1000;
-            font-weight: 600;
+            position: fixed; top: 20px; right: 20px; background: #10b981;
+            color: white; padding: 15px 25px; border-radius: 10px;
+            box-shadow: 0 10px 25px rgba(0,0,0,0.1); transform: translateX(400px);
+            transition: transform 0.3s ease; z-index: 1000; font-weight: 600;
         }
-        
         .notification.show { transform: translateX(0); }
         .notification.error { background: #ef4444; }
-        
         @media (max-width: 768px) {
             .container { padding: 15px; }
             .header { padding: 20px; }
@@ -951,14 +720,22 @@ def dashboard():
         
         async function loadEmails() {
             try {
+                console.log('🔄 Loading emails...');
                 const response = await fetch('/api/emails');
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                
                 const data = await response.json();
+                console.log('📊 Email data received:', data);
+                
                 emailsData = data.all_emails || [];
                 
-                // Update stats
-                document.getElementById('totalEmails').textContent = data.stats.total_unread;
-                document.getElementById('directEmails').textContent = data.stats.direct_count;
-                document.getElementById('highPriority').textContent = data.stats.high_priority_count;
+                // Update stats safely
+                document.getElementById('totalEmails').textContent = data.stats?.total_unread || 0;
+                document.getElementById('directEmails').textContent = data.stats?.direct_count || 0;
+                document.getElementById('highPriority').textContent = data.stats?.high_priority_count || 0;
                 
                 // Update status
                 const statusEl = document.getElementById('statusIndicator');
@@ -974,47 +751,61 @@ def dashboard():
                 displayEmails(emailsData);
                 
             } catch (error) {
-                console.error('Error loading emails:', error);
+                console.error('❌ Error loading emails:', error);
                 document.getElementById('emailsList').innerHTML = 
-                    '<div style="text-align: center; padding: 40px; color: #6b7280;"><i class="fas fa-exclamation-circle"></i><h3>Error loading emails</h3><p>Please refresh to try again</p></div>';
+                    `<div style="text-align: center; padding: 40px; color: #6b7280;">
+                        <i class="fas fa-exclamation-circle"></i>
+                        <h3>Error loading emails</h3>
+                        <p>${error.message}</p>
+                        <button onclick="refreshEmails()" style="margin-top: 15px; padding: 10px 20px; background: #3b82f6; color: white; border: none; border-radius: 8px; cursor: pointer;">
+                            <i class="fas fa-retry"></i> Try Again
+                        </button>
+                    </div>`;
+                showNotification('Failed to load emails', 'error');
             }
         }
         
         function displayEmails(emails) {
             const emailsList = document.getElementById('emailsList');
             
-            if (emails.length === 0) {
+            if (!emails || emails.length === 0) {
                 emailsList.innerHTML = 
-                    '<div style="text-align: center; padding: 40px; color: #6b7280;"><i class="fas fa-inbox"></i><h3>No unread emails</h3><p>Your inbox is clean!</p></div>';
+                    `<div style="text-align: center; padding: 40px; color: #6b7280;">
+                        <i class="fas fa-inbox"></i>
+                        <h3>No unread emails</h3>
+                        <p>Your inbox is clean!</p>
+                    </div>`;
                 return;
             }
             
+            console.log(`📧 Displaying ${emails.length} emails`);
+            
             emailsList.innerHTML = emails.map(email => `
-                <div class="email-card ${email.priority}">
+                <div class="email-card ${email.priority || 'low'}">
                     <div class="email-header">
-                        <div class="email-subject">${email.subject}</div>
-                        <div class="priority-badge">${email.priority.toUpperCase()}</div>
+                        <div class="email-subject">${email.subject || 'No Subject'}</div>
+                        <div class="priority-badge">${(email.priority || 'LOW').toUpperCase()}</div>
                     </div>
                     <div class="email-meta">
                         <div class="meta-item">
                             <i class="fas fa-user"></i>
-                            <span>${email.from_email}</span>
+                            <span>${email.from_email || 'Unknown'}</span>
                         </div>
                         <div class="meta-item">
                             <i class="fas fa-calendar"></i>
-                            <span>${email.date}</span>
+                            <span>${email.date || 'Unknown'}</span>
                         </div>
                         <div class="meta-item">
                             <i class="fas fa-clock"></i>
-                            <span>${email.time}</span>
+                            <span>${email.time || 'Unknown'}</span>
                         </div>
                         <div class="meta-item">
                             <i class="fas fa-tag"></i>
-                            <span>${email.email_type}</span>
+                            <span>${email.email_type || 'general'}</span>
                         </div>
                     </div>
-                    <div class="email-snippet">${email.display_snippet}</div>
-                    ${email.urgency_reason ? `<div style="background: #fef3c7; padding: 8px 12px; border-radius: 6px; margin: 10px 0; font-size: 0.85rem; color: #92400e;"><strong>Why ${email.priority}:</strong> ${email.urgency_reason}</div>` : ''}
+                    <div class="email-snippet">${email.display_snippet || email.snippet || 'No preview available'}</div>
+                    ${email.urgency_reason ? `<div style="background: #fef3c7; padding: 8px 12px; border-radius: 6px; margin: 10px 0; font-size: 0.85rem; color: #92400e;"><strong>Why ${email.priority || 'classified'}:</strong> ${email.urgency_reason}</div>` : ''}
                     ${(email.priority === 'high' || email.priority === 'critical') ? 
                         `<button class="draft-btn" onclick="createDraft('${email.id}')">
                             <i class="fas fa-pen"></i> Create Draft Reply
@@ -1049,7 +840,7 @@ def dashboard():
                 }
                 
             } catch (error) {
-                console.error('Error creating draft:', error);
+                console.error('❌ Error creating draft:', error);
                 showNotification('❌ Failed to create draft', 'error');
             }
         }
@@ -1082,7 +873,7 @@ def dashboard():
                 }
                 
             } catch (error) {
-                console.error('Error creating bulk drafts:', error);
+                console.error('❌ Error creating bulk drafts:', error);
                 showNotification('❌ Failed to create drafts', 'error');
             }
         }
@@ -1094,7 +885,10 @@ def dashboard():
         }
         
         // Load emails on page load
-        document.addEventListener('DOMContentLoaded', loadEmails);
+        document.addEventListener('DOMContentLoaded', function() {
+            console.log('🚀 Page loaded, initializing...');
+            loadEmails();
+        });
         
         // Auto-refresh every 3 minutes
         setInterval(loadEmails, 180000);
@@ -1104,142 +898,139 @@ def dashboard():
 
 @app.route('/api/emails')
 def api_emails():
-    """API endpoint to get email data"""
+    """Robust API endpoint for email data"""
     try:
-        data = assistant.get_stats()
-        return jsonify(data)
+        if not assistant:
+            return jsonify({
+                'error': 'Assistant not initialized',
+                'all_emails': [],
+                'direct_emails': [],
+                'stats': {'total_unread': 0, 'direct_count': 0, 'high_priority_count': 0},
+                'gmail_connected': False,
+                'openai_connected': False
+            }), 200
+        
+        print("📧 API call - fetching email stats")
+        data = assistant.get_stats_safe()
+        print(f"✅ API returning {len(data.get('all_emails', []))} emails")
+        return jsonify(data), 200
+        
     except Exception as e:
-        return jsonify({'error': str(e), 'gmail_connected': False, 'stats': {'total_unread': 0, 'direct_count': 0, 'high_priority_count': 0}}), 200
+        print(f"❌ API error: {e}")
+        # Return safe fallback instead of error
+        return jsonify({
+            'error': str(e),
+            'all_emails': [],
+            'direct_emails': [],
+            'stats': {'total_unread': 0, 'direct_count': 0, 'high_priority_count': 0},
+            'gmail_connected': False,
+            'openai_connected': False,
+            'last_updated': datetime.now().isoformat()
+        }), 200
 
 @app.route('/api/create-draft', methods=['POST'])
 def api_create_draft():
-    """API endpoint to create a single draft"""
+    """Robust draft creation endpoint"""
     try:
+        if not assistant:
+            return jsonify({'success': False, 'message': 'Assistant not available'}), 200
+        
         data = request.get_json()
+        if not data:
+            return jsonify({'success': False, 'message': 'No data provided'}), 200
+        
         email_id = data.get('email_id')
-        
         if not email_id:
-            return jsonify({'success': False, 'message': 'Email ID required'}), 400
+            return jsonify({'success': False, 'message': 'Email ID required'}), 200
         
-        # Find the email
-        emails = assistant.get_emails()
-        email = next((e for e in emails if e['id'] == email_id), None)
+        # Find email safely
+        emails = assistant.get_emails_with_timeout()
+        email = None
+        for e in emails:
+            if e.get('id') == email_id:
+                email = e
+                break
         
         if not email:
-            return jsonify({'success': False, 'message': 'Email not found'}), 404
+            return jsonify({'success': False, 'message': 'Email not found'}), 200
         
         # Create draft
-        success, message = assistant.create_draft(email)
-        
-        return jsonify({'success': success, 'message': message})
+        success, message = assistant.create_draft_safe(email)
+        return jsonify({'success': success, 'message': message}), 200
         
     except Exception as e:
-        return jsonify({'success': False, 'message': str(e)}), 500
+        print(f"❌ Draft creation error: {e}")
+        return jsonify({'success': False, 'message': f'Error: {str(e)}'}), 200
 
 @app.route('/api/create-drafts-bulk', methods=['POST'])
 def api_create_drafts_bulk():
-    """API endpoint to create multiple drafts"""
+    """Robust bulk draft creation"""
     try:
+        if not assistant:
+            return jsonify({'success': False, 'message': 'Assistant not available'}), 200
+        
         data = request.get_json()
+        if not data:
+            return jsonify({'success': False, 'message': 'No data provided'}), 200
+        
         email_ids = data.get('email_ids', [])
-        
         if not email_ids:
-            return jsonify({'success': False, 'message': 'No email IDs provided'}), 400
+            return jsonify({'success': False, 'message': 'No email IDs provided'}), 200
         
-        emails = assistant.get_emails()
+        emails = assistant.get_emails_with_timeout()
         created_count = 0
         errors = []
         
-        for email_id in email_ids:
-            email = next((e for e in emails if e['id'] == email_id), None)
+        for email_id in email_ids[:5]:  # Limit to prevent timeout
+            email = None
+            for e in emails:
+                if e.get('id') == email_id:
+                    email = e
+                    break
+            
             if email:
-                success, message = assistant.create_draft(email)
+                success, message = assistant.create_draft_safe(email)
                 if success:
                     created_count += 1
                 else:
-                    errors.append(f"Failed: {message}")
+                    errors.append(message)
         
         return jsonify({
             'success': created_count > 0,
             'created_count': created_count,
             'total_requested': len(email_ids),
             'errors': errors
-        })
+        }), 200
         
     except Exception as e:
-        return jsonify({'success': False, 'message': str(e)}), 500
+        print(f"❌ Bulk draft error: {e}")
+        return jsonify({'success': False, 'message': f'Error: {str(e)}'}), 200
 
 @app.route('/debug')
 def debug():
-    """Debug information"""
+    """Simple debug page"""
     try:
-        emails = assistant.get_emails()
-        stats = assistant.get_stats()
+        if not assistant:
+            return "Assistant not initialized", 500
         
-        debug_info = {
-            'Gmail Connected': assistant.gmail_connected,
-            'OpenAI Available': assistant.openai_available,
-            'Total Emails': len(emails),
-            'Environment Variables': {
-                'GMAIL_REFRESH_TOKEN': bool(os.getenv('GMAIL_REFRESH_TOKEN')),
-                'GMAIL_CLIENT_ID': bool(os.getenv('GMAIL_CLIENT_ID')),
-                'GMAIL_CLIENT_SECRET': bool(os.getenv('GMAIL_CLIENT_SECRET')),
-                'OPENAI_API_KEY': bool(os.getenv('OPENAI_API_KEY'))
-            },
-            'Stats': stats['stats'],
-            'Sample Emails': [
-                {
-                    'subject': email.get('subject', ''),
-                    'priority': email.get('priority', ''),
-                    'summary': email.get('display_snippet', ''),
-                    'reason': email.get('urgency_reason', '')
-                } for email in emails[:3]
-            ]
-        }
-        
-        return f'''<!DOCTYPE html>
+        return f'''
 <html>
-<head>
-    <title>Gmail Assistant - System Debug</title>
-    <style>
-        body {{ font-family: monospace; background: #0f172a; color: #10b981; padding: 20px; line-height: 1.6; }}
-        .container {{ max-width: 1000px; margin: 0 auto; }}
-        .section {{ background: #1e293b; padding: 20px; margin: 15px 0; border-radius: 8px; border: 1px solid #334155; }}
-        .success {{ color: #10b981; }}
-        .error {{ color: #ef4444; }}
-        .warning {{ color: #f59e0b; }}
-        pre {{ background: #0f172a; padding: 15px; border-radius: 5px; overflow-x: auto; border: 1px solid #334155; }}
-        h1, h2 {{ color: #06b6d4; }}
-        .back-btn {{ 
-            background: #06b6d4; color: #0f172a; padding: 10px 20px; 
-            text-decoration: none; border-radius: 5px; font-weight: bold; 
-            display: inline-block; margin-bottom: 15px;
-        }}
-    </style>
+<head><title>Gmail Assistant Debug</title>
+<style>body{{font-family:monospace;background:#000;color:#0f0;padding:20px;}}</style>
 </head>
 <body>
-    <div class="container">
-        <h1>🔧 Gmail Assistant Debug Console</h1>
-        <a href="/dashboard" class="back-btn">← Back to Dashboard</a>
-        
-        <div class="section">
-            <h2>🔍 System Status</h2>
-            <p>Gmail: <span class="{'success' if assistant.gmail_connected else 'warning'}">{'✅ Connected' if assistant.gmail_connected else '📋 Demo Mode'}</span></p>
-            <p>AI: <span class="{'success' if assistant.openai_available else 'warning'}">{'✅ Active' if assistant.openai_available else '📋 Rule-Based'}</span></p>
-            <p>Emails: <span class="success">{len(emails)} loaded</span></p>
-        </div>
-        
-        <div class="section">
-            <h2>📊 Debug Information</h2>
-            <pre>{json.dumps(debug_info, indent=2)}</pre>
-        </div>
-        
-        <div class="section">
-            <h2>🔗 Quick Links</h2>
-            <p><a href="/api/emails" style="color: #06b6d4;">📧 Raw API Response</a></p>
-            <p><a href="/" style="color: #06b6d4;">🏠 Home</a></p>
-        </div>
-    </div>
+<h1>🔧 Gmail Assistant Debug</h1>
+<p>Gmail Connected: {'✅ Yes' if assistant.gmail_connected else '❌ No'}</p>
+<p>OpenAI Available: {'✅ Yes' if assistant.openai_available else '❌ No'}</p>
+<p>Environment Variables:</p>
+<ul>
+<li>GMAIL_REFRESH_TOKEN: {'✅ Set' if os.getenv('GMAIL_REFRESH_TOKEN') else '❌ Missing'}</li>
+<li>GMAIL_CLIENT_ID: {'✅ Set' if os.getenv('GMAIL_CLIENT_ID') else '❌ Missing'}</li>
+<li>GMAIL_CLIENT_SECRET: {'✅ Set' if os.getenv('GMAIL_CLIENT_SECRET') else '❌ Missing'}</li>
+<li>OPENAI_API_KEY: {'✅ Set' if os.getenv('OPENAI_API_KEY') else '❌ Missing'}</li>
+</ul>
+<p><a href="/dashboard" style="color:#0ff;">← Back to Dashboard</a></p>
+<p><a href="/api/emails" style="color:#0ff;">📧 Test Email API</a></p>
 </body>
 </html>'''
         
