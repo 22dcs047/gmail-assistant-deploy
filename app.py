@@ -1283,13 +1283,14 @@ LOGIN_TEMPLATE = '''
         </div>
         {% endif %}
         
-        <form method="POST">
+        <form method="POST" autocomplete="off">
             <div class="form-group">
                 <label for="username"><i class="fas fa-user"></i> Username</label>
                 <div class="input-group">
                     <i class="fas fa-user"></i>
                     <input type="text" id="username" name="username" required 
-                           placeholder="Enter your username" autocomplete="username">
+                           placeholder="Enter your username" autocomplete="off" 
+                           spellcheck="false" data-form-type="other">
                 </div>
             </div>
             
@@ -1298,12 +1299,13 @@ LOGIN_TEMPLATE = '''
                 <div class="input-group">
                     <i class="fas fa-lock"></i>
                     <input type="password" id="password" name="password" required 
-                           placeholder="Enter your password" autocomplete="current-password">
+                           placeholder="Enter your password" autocomplete="new-password"
+                           spellcheck="false" data-form-type="other">
                 </div>
             </div>
             
             <button type="submit" class="login-btn">
-                <i class="fas fa-sign-in-alt"></i> Login
+                <i class="fas fa-sign-in-alt"></i>  Login
             </button>
         </form>
         
