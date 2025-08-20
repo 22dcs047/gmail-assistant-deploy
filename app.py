@@ -1,5 +1,4 @@
-# Gmail Assistant - Enhanced Professional Version with Beautiful UI
-# Fixes: 1) Improved priority detection 2) Draft creation buttons 3) Stunning modern design
+# Gmail Assistant - FIXED VERSION with Better Classification & Readable Colors
 from flask import Flask, jsonify, request
 from datetime import datetime, timedelta
 import json
@@ -7,6 +6,7 @@ import os
 import base64
 from email.mime.text import MIMEText
 import time
+import re
 
 # Import Gmail API libraries
 try:
@@ -109,22 +109,24 @@ class RealGmailAssistant:
             return False
     
     def classify_email_with_ai(self, subject, body, sender):
-        """Enhanced AI classification with better priority detection"""
+        """Enhanced AI classification with stricter priority rules"""
         if not self.openai_available:
-            return self._classify_email_enhanced(subject, body, sender)
+            return self._classify_email_strict(subject, body, sender)
         
         try:
-            prompt = f"""Analyze this email and classify it accurately:
+            prompt = f"""Analyze this email and classify it VERY STRICTLY:
 
 Subject: {subject}
 From: {sender}
 Content: {body[:500]}...
 
-IMPORTANT: Be very strict about priority levels:
-- CRITICAL: Life-threatening, legal deadlines today, security breaches
-- HIGH: Important deadlines (within days), registration deadlines, meeting invitations, academic deadlines
-- MEDIUM: Announcements, newsletters, course updates, general reminders
-- LOW: Promotional content, non-urgent notifications
+STRICT PRIORITY RULES:
+- CRITICAL: Only life-threatening emergencies, immediate legal deadlines (today), security breaches
+- HIGH: Academic deadlines, registration deadlines, meeting invitations, interview calls, urgent work matters
+- MEDIUM: Course announcements, academic updates, general reminders, institutional emails
+- LOW: Promotional emails, newsletters, automated notifications, marketing content
+
+IMPORTANT: If sender contains "noreply", "no-reply", or has promotional content, it should be LOW priority unless it's a critical security alert.
 
 Provide a JSON response with:
 1. priority: "critical", "high", "medium", or "low"
@@ -137,7 +139,7 @@ Format as valid JSON only."""
                 model="gpt-3.5-turbo",
                 messages=[{"role": "user", "content": prompt}],
                 max_tokens=200,
-                temperature=0.2
+                temperature=0.1
             )
             
             result = json.loads(response.choices[0].message.content.strip())
@@ -146,53 +148,88 @@ Format as valid JSON only."""
             
         except Exception as e:
             print(f"❌ AI classification error: {e}")
-            return self._classify_email_enhanced(subject, body, sender)
+            return self._classify_email_strict(subject, body, sender)
     
-    def _classify_email_enhanced(self, subject, body, sender):
-        """Enhanced rule-based email classification with better deadline detection"""
+    def _classify_email_strict(self, subject, body, sender):
+        """STRICT rule-based email classification to prevent over-classification"""
         subject_lower = subject.lower()
         body_lower = body.lower()
+        sender_lower = sender.lower()
         
-        # Enhanced keyword detection
-        critical_keywords = ['urgent', 'critical', 'emergency', 'immediate', 'asap', 'expires today', 'security alert', 'final notice']
-        high_keywords = ['deadline', 'due', 'registration deadline', 'last day', 'expires', 'meeting', 'interview', 'submission', 'important', 'reminder', 'final reminder']
-        medium_keywords = ['announcement', 'newsletter', 'course', 'lecture', 'workshop', 'invitation', 'update', 'notification']
+        # First check if it's promotional/automated
+        promotional_indicators = [
+            'noreply', 'no-reply', 'donotreply', 'unsubscribe', 'marketing',
+            'newsletter', 'promotional', 'offer', 'deal', 'sale', 'discount',
+            'subscribe', 'automated', 'system@', 'support@', 'hello@'
+        ]
+        
+        is_promotional = any(indicator in sender_lower or indicator in subject_lower for indicator in promotional_indicators)
+        
+        # Security alerts are exception - can be high even if from automated systems
+        security_keywords = ['security alert', 'login attempt', 'password reset', 'account breach', 'suspicious activity']
+        is_security = any(keyword in subject_lower or keyword in body_lower for keyword in security_keywords)
+        
+        # If promotional and not security, automatically low priority
+        if is_promotional and not is_security:
+            return {
+                'priority': 'low',
+                'email_type': 'promotional',
+                'urgency_reason': 'Promotional/automated email',
+                'ai_classified': False
+            }
+        
+        # Critical keywords (very strict)
+        critical_keywords = ['emergency', 'urgent medical', 'life threatening', 'immediate danger', 'security breach']
+        
+        # High priority keywords (strict)
+        high_keywords = [
+            'deadline', 'due today', 'due tomorrow', 'registration deadline', 'last day to',
+            'meeting invitation', 'interview', 'exam registration', 'assignment due',
+            'project deadline', 'submission deadline'
+        ]
+        
+        # Medium priority keywords
+        medium_keywords = [
+            'announcement', 'course update', 'lecture', 'workshop', 'seminar',
+            'academic calendar', 'schedule change', 'reminder'
+        ]
         
         priority = 'low'
         urgency_reason = 'Default low priority'
         
-        # Check for critical priorities
+        # Check for critical priorities (very rare)
         if any(keyword in subject_lower or keyword in body_lower for keyword in critical_keywords):
             priority = 'critical'
-            urgency_reason = 'Contains critical urgency keywords'
-        # Enhanced deadline detection
-        elif any(keyword in subject_lower for keyword in high_keywords) or 'deadline' in subject_lower:
+            urgency_reason = 'Contains critical emergency keywords'
+        # Check for high priorities (strict matching)
+        elif any(keyword in subject_lower for keyword in high_keywords):
             priority = 'high'
-            urgency_reason = 'Contains deadline or important keywords in subject'
-        elif any(keyword in body_lower for keyword in high_keywords):
+            urgency_reason = 'Contains deadline/important keywords in subject'
+        elif 'deadline' in subject_lower and not is_promotional:
             priority = 'high'
-            urgency_reason = 'Contains important keywords in content'
+            urgency_reason = 'Subject contains deadline'
+        # Medium priority for academic content
         elif any(keyword in subject_lower or keyword in body_lower for keyword in medium_keywords):
             priority = 'medium'
-            urgency_reason = 'Contains medium priority keywords'
-        elif '@charusat.edu.in' in sender and 'no-reply' not in sender.lower():
+            urgency_reason = 'Academic/institutional content'
+        elif '@charusat.edu.in' in sender and not is_promotional:
             priority = 'medium'
-            urgency_reason = 'Academic email from institution'
+            urgency_reason = 'Email from academic institution'
         
         # Determine email type
         email_type = 'general'
-        if '@charusat.edu.in' in sender or 'professor' in sender.lower() or 'academic' in subject_lower:
-            email_type = 'academic'
-        elif 'security' in subject_lower or 'alert' in subject_lower:
-            email_type = 'security'
-        elif 'noreply' in sender or 'unsubscribe' in body_lower:
+        if is_promotional:
             email_type = 'promotional'
+        elif '@charusat.edu.in' in sender or 'professor' in sender_lower or 'academic' in subject_lower:
+            email_type = 'academic'
+        elif is_security:
+            email_type = 'security'
         
         return {
             'priority': priority,
             'email_type': email_type,
             'urgency_reason': urgency_reason,
-            'ai_classified': self.openai_available
+            'ai_classified': False
         }
     
     def get_unread_emails(self):
@@ -237,8 +274,11 @@ Format as valid JSON only."""
                         date_str = datetime.now().strftime('%Y-%m-%d')
                         time_str = datetime.now().strftime('%H:%M')
                     
-                    # Enhanced classification
+                    # STRICT classification
                     classification = self.classify_email_with_ai(subject, body, from_email)
+                    
+                    # Create better snippet for display
+                    display_snippet = self._create_display_snippet(subject, snippet, body)
                     
                     emails.append({
                         'id': message['id'],
@@ -246,7 +286,8 @@ Format as valid JSON only."""
                         'from_email': from_email,
                         'to_field': to_field,
                         'snippet': snippet,
-                        'body': body[:1000] + '...' if len(body) > 1000 else body,
+                        'display_snippet': display_snippet,
+                        'body': body,
                         'date': date_str,
                         'time': time_str,
                         'priority': classification['priority'],
@@ -264,6 +305,25 @@ Format as valid JSON only."""
         except Exception as e:
             print(f"❌ Error fetching emails: {e}")
             return self.get_demo_emails()
+    
+    def _create_display_snippet(self, subject, snippet, body):
+        """Create a better display snippet for dashboard"""
+        # Use the first meaningful sentence from body or snippet
+        text = body if body else snippet
+        if not text:
+            return "No preview available"
+        
+        # Clean up the text
+        text = re.sub(r'<[^>]+>', '', text)  # Remove HTML tags
+        text = re.sub(r'\s+', ' ', text)     # Normalize whitespace
+        text = text.strip()
+        
+        # Get first sentence or 120 characters
+        sentences = text.split('.')
+        if sentences and len(sentences[0]) > 20:
+            return sentences[0][:120] + "..."
+        else:
+            return text[:120] + "..." if len(text) > 120 else text
     
     def _extract_email_body(self, payload):
         """Extract text content from email payload"""
@@ -397,6 +457,8 @@ Charusat University
                 'from_email': 'system@gmail-assistant.local',
                 'to_field': '22dcs047@charusat.edu.in',
                 'snippet': 'Set environment variables in Vercel to connect your real Gmail account',
+                'display_snippet': 'Configure your environment variables to connect to real Gmail and unlock full functionality.',
+                'body': 'This is a demo email. Set your environment variables to connect real Gmail.',
                 'date': now.strftime('%Y-%m-%d'),
                 'time': now.strftime('%H:%M'),
                 'priority': 'high',
@@ -407,9 +469,17 @@ Charusat University
         ]
     
     def get_email_stats(self):
-        """Get email statistics"""
+        """Get email statistics with better direct email detection"""
         emails = self.get_unread_emails()
-        direct = [e for e in emails if '22dcs047@charusat.edu.in' in e.get('to_field', '')]
+        
+        # Better direct email detection
+        direct = []
+        for email in emails:
+            to_field = email.get('to_field', '').lower()
+            # Check if user email is directly in To field (not CC/BCC)
+            if '22dcs047@charusat.edu.in' in to_field:
+                direct.append(email)
+        
         high_priority = [e for e in emails if e['priority'] in ['high', 'critical']]
         medium_priority = [e for e in emails if e['priority'] == 'medium']
         low_priority = [e for e in emails if e['priority'] == 'low']
@@ -453,271 +523,169 @@ def home():
         * {{ margin: 0; padding: 0; box-sizing: border-box; }}
         body {{ 
             font-family: 'Inter', 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 50%, #f093fb 100%); 
+            background: linear-gradient(135deg, #1e40af 0%, #3b82f6 50%, #06b6d4 100%); 
             min-height: 100vh; 
-            color: white; 
+            color: #ffffff; 
             overflow-x: hidden;
-            position: relative;
-        }}
-        body::before {{
-            content: '';
-            position: absolute;
-            top: 0;
-            left: 0;
-            right: 0;
-            bottom: 0;
-            background: url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><defs><pattern id="grain" width="100" height="100" patternUnits="userSpaceOnUse"><circle cx="25" cy="25" r="1" fill="rgba(255,255,255,0.05)"/><circle cx="75" cy="75" r="1" fill="rgba(255,255,255,0.05)"/><circle cx="50" cy="10" r="0.5" fill="rgba(255,255,255,0.03)"/></pattern></defs><rect width="100" height="100" fill="url(%23grain)"/></svg>');
-            animation: float 20s ease-in-out infinite;
-        }}
-        @keyframes float {{
-            0%, 100% {{ transform: translateY(0px) rotate(0deg); }}
-            50% {{ transform: translateY(-20px) rotate(180deg); }}
         }}
         .container {{ 
             max-width: 1200px; 
             margin: 0 auto; 
             padding: 40px 20px; 
-            position: relative;
-            z-index: 2;
         }}
         .hero {{ 
-            background: rgba(255,255,255,0.15); 
-            padding: 80px 50px; 
-            border-radius: 30px; 
-            backdrop-filter: blur(25px); 
+            background: rgba(255,255,255,0.95); 
+            padding: 60px 40px; 
+            border-radius: 20px; 
             text-align: center; 
-            box-shadow: 0 30px 60px rgba(0,0,0,0.2);
-            border: 1px solid rgba(255,255,255,0.25);
-            position: relative;
-            overflow: hidden;
-            margin-bottom: 50px;
-        }}
-        .hero::before {{
-            content: '';
-            position: absolute;
-            top: -50%;
-            left: -50%;
-            width: 200%;
-            height: 200%;
-            background: conic-gradient(from 0deg, transparent, rgba(255,255,255,0.1), transparent);
-            animation: rotate 30s linear infinite;
-        }}
-        @keyframes rotate {{
-            from {{ transform: rotate(0deg); }}
-            to {{ transform: rotate(360deg); }}
-        }}
-        .hero-content {{
-            position: relative;
-            z-index: 2;
+            box-shadow: 0 20px 40px rgba(0,0,0,0.15);
+            color: #1f2937;
+            margin-bottom: 40px;
         }}
         .hero h1 {{ 
-            font-size: 4rem; 
-            margin-bottom: 25px; 
+            font-size: 3.5rem; 
+            margin-bottom: 20px; 
             font-weight: 800; 
-            background: linear-gradient(45deg, #fff, #e8f4ff, #fff);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-            background-clip: text;
-            text-shadow: 0 5px 15px rgba(0,0,0,0.1);
-            letter-spacing: -1px;
+            color: #1f2937;
         }}
         .hero p {{ 
-            font-size: 1.4rem; 
-            margin-bottom: 50px; 
-            opacity: 0.95; 
-            line-height: 1.7;
-            max-width: 600px;
-            margin-left: auto;
-            margin-right: auto;
+            font-size: 1.3rem; 
+            margin-bottom: 30px; 
+            color: #4b5563;
+            line-height: 1.6;
         }}
         .btn {{ 
-            background: linear-gradient(135deg, #ff6b6b, #ee5a24, #ff6b6b);
+            background: linear-gradient(135deg, #3b82f6, #1e40af);
             color: white; 
-            padding: 20px 40px; 
+            padding: 15px 30px; 
             border: none; 
-            border-radius: 60px; 
-            font-size: 1.2rem; 
-            font-weight: 700; 
+            border-radius: 10px; 
+            font-size: 1.1rem; 
+            font-weight: 600; 
             text-decoration: none; 
             display: inline-block; 
-            margin: 15px 20px; 
-            transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275); 
-            box-shadow: 0 15px 35px rgba(255,107,107,0.4);
-            position: relative;
-            overflow: hidden;
-            text-transform: uppercase;
-            letter-spacing: 1px;
-        }}
-        .btn::before {{
-            content: '';
-            position: absolute;
-            top: 0;
-            left: -100%;
-            width: 100%;
-            height: 100%;
-            background: linear-gradient(90deg, transparent, rgba(255,255,255,0.2), transparent);
-            transition: left 0.5s;
-        }}
-        .btn:hover::before {{
-            left: 100%;
+            margin: 10px 15px; 
+            transition: all 0.3s ease; 
+            box-shadow: 0 4px 15px rgba(59,130,246,0.3);
         }}
         .btn:hover {{ 
-            transform: translateY(-5px) scale(1.05); 
-            box-shadow: 0 25px 50px rgba(255,107,107,0.5); 
+            transform: translateY(-2px); 
+            box-shadow: 0 8px 25px rgba(59,130,246,0.4); 
         }}
         .btn.primary {{
-            background: linear-gradient(135deg, #00b894, #00cec9, #74b9ff);
-            box-shadow: 0 15px 35px rgba(0,184,148,0.4);
+            background: linear-gradient(135deg, #059669, #047857);
+            box-shadow: 0 4px 15px rgba(5,150,105,0.3);
         }}
         .btn.primary:hover {{
-            box-shadow: 0 25px 50px rgba(0,184,148,0.5);
+            box-shadow: 0 8px 25px rgba(5,150,105,0.4);
         }}
         .status-badge {{ 
-            background: linear-gradient(135deg, #{'00b894, #00cec9' if assistant.gmail_connected else 'ff6b6b, #ee5a24'}); 
+            background: linear-gradient(135deg, #{'059669, #047857' if assistant.gmail_connected else 'dc2626, #b91c1c'}); 
             color: white; 
-            padding: 20px 40px; 
-            border-radius: 60px; 
-            font-weight: 700; 
-            margin: 20px; 
+            padding: 12px 24px; 
+            border-radius: 25px; 
+            font-weight: 600; 
+            margin: 10px; 
             display: inline-block; 
-            animation: pulse 3s infinite;
-            box-shadow: 0 15px 35px rgba({'0,184,148' if assistant.gmail_connected else '255,107,107'},0.4);
-            font-size: 1.1rem;
-            text-transform: uppercase;
-            letter-spacing: 2px;
-        }}
-        @keyframes pulse {{ 
-            0% {{ transform: scale(1); box-shadow: 0 15px 35px rgba({'0,184,148' if assistant.gmail_connected else '255,107,107'},0.4); }} 
-            50% {{ transform: scale(1.08); box-shadow: 0 20px 45px rgba({'0,184,148' if assistant.gmail_connected else '255,107,107'},0.6); }} 
-            100% {{ transform: scale(1); box-shadow: 0 15px 35px rgba({'0,184,148' if assistant.gmail_connected else '255,107,107'},0.4); }} 
+            box-shadow: 0 4px 15px rgba({'5,150,105' if assistant.gmail_connected else '220,38,38'},0.3);
         }}
         .features {{
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
-            gap: 40px;
-            margin-top: 80px;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 30px;
+            margin-top: 40px;
         }}
         .feature-card {{
-            background: rgba(255,255,255,0.12);
-            padding: 40px;
-            border-radius: 25px;
-            backdrop-filter: blur(15px);
-            border: 1px solid rgba(255,255,255,0.25);
-            transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
-            position: relative;
-            overflow: hidden;
-        }}
-        .feature-card::before {{
-            content: '';
-            position: absolute;
-            top: 0;
-            left: 0;
-            right: 0;
-            height: 3px;
-            background: linear-gradient(90deg, #ff6b6b, #ee5a24, #00b894, #74b9ff);
-            transform: scaleX(0);
-            transition: transform 0.4s ease;
-        }}
-        .feature-card:hover::before {{
-            transform: scaleX(1);
+            background: rgba(255,255,255,0.95);
+            padding: 30px;
+            border-radius: 15px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.1);
+            color: #1f2937;
+            transition: all 0.3s ease;
         }}
         .feature-card:hover {{
-            transform: translateY(-15px) scale(1.02);
-            background: rgba(255,255,255,0.18);
-            box-shadow: 0 25px 50px rgba(0,0,0,0.15);
+            transform: translateY(-5px);
+            box-shadow: 0 20px 40px rgba(0,0,0,0.15);
         }}
         .feature-icon {{
-            font-size: 3.5rem;
-            margin-bottom: 25px;
-            background: linear-gradient(45deg, #ff6b6b, #ee5a24);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-            background-clip: text;
+            font-size: 3rem;
+            margin-bottom: 20px;
+            color: #3b82f6;
         }}
         .feature-card h3 {{
-            font-size: 1.5rem;
+            font-size: 1.4rem;
             margin-bottom: 15px;
             font-weight: 700;
+            color: #1f2937;
         }}
         .feature-card p {{
+            color: #4b5563;
             line-height: 1.6;
-            opacity: 0.9;
-            font-size: 1.1rem;
         }}
         .status-grid {{
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
             gap: 20px;
-            margin: 40px 0;
+            margin: 30px 0;
         }}
         .status-item {{
             background: rgba(255,255,255,0.1);
             padding: 20px;
-            border-radius: 15px;
-            backdrop-filter: blur(10px);
-            border: 1px solid rgba(255,255,255,0.2);
+            border-radius: 10px;
             text-align: center;
+            backdrop-filter: blur(10px);
         }}
         .status-item strong {{
             display: block;
             font-size: 1.2rem;
             margin-top: 5px;
         }}
-        @media (max-width: 768px) {{
-            .hero h1 {{ font-size: 2.8rem; }}
-            .hero p {{ font-size: 1.2rem; }}
-            .btn {{ padding: 15px 30px; font-size: 1rem; }}
-            .features {{ grid-template-columns: 1fr; }}
-        }}
     </style>
 </head>
 <body>
     <div class="container">
         <div class="hero">
-            <div class="hero-content">
-                <div class="status-badge">
-                    <i class="fas fa-{'satellite-dish' if assistant.gmail_connected else 'exclamation-triangle'}"></i> 
-                    {status.upper()} 
-                    <i class="fas fa-{'satellite-dish' if assistant.gmail_connected else 'exclamation-triangle'}"></i>
-                </div>
-                <h1><i class="fas fa-brain"></i> AI Gmail Assistant</h1>
-                <p>{'Experience the future of email management with real Gmail integration and intelligent AI-powered features that transform how you handle your inbox.' if assistant.gmail_connected else 'Demo mode active - Configure environment variables to unlock the full power of real Gmail integration'}</p>
-                
-                <div class="status-grid">
-                    <div class="status-item">
-                        Gmail Connected
-                        <strong>{'✅ LIVE' if assistant.gmail_connected else '❌ DEMO'}</strong>
-                    </div>
-                    <div class="status-item">
-                        AI Powered
-                        <strong>{'✅ ACTIVE' if assistant.openai_available else '❌ DISABLED'}</strong>
-                    </div>
-                    <div class="status-item">
-                        Draft Creation
-                        <strong>{'✅ READY' if assistant.gmail_connected else '❌ OFFLINE'}</strong>
-                    </div>
-                </div>
-                
-                <a href="/dashboard" class="btn primary"><i class="fas fa-rocket"></i> Launch Dashboard</a>
-                <a href="/debug" class="btn"><i class="fas fa-diagnostics"></i> System Status</a>
+            <div class="status-badge">
+                <i class="fas fa-{'satellite-dish' if assistant.gmail_connected else 'exclamation-triangle'}"></i> 
+                {status.upper()} 
             </div>
+            <h1><i class="fas fa-brain"></i> AI Gmail Assistant</h1>
+            <p>{'Intelligent email management with real Gmail integration and smart priority detection' if assistant.gmail_connected else 'Demo mode - Configure environment variables for real Gmail connection'}</p>
+            
+            <div class="status-grid">
+                <div class="status-item">
+                    Gmail Status
+                    <strong>{'✅ CONNECTED' if assistant.gmail_connected else '❌ DEMO MODE'}</strong>
+                </div>
+                <div class="status-item">
+                    AI Classification
+                    <strong>{'✅ ACTIVE' if assistant.openai_available else '❌ BASIC RULES'}</strong>
+                </div>
+                <div class="status-item">
+                    Draft Creation
+                    <strong>{'✅ ENABLED' if assistant.gmail_connected else '❌ DISABLED'}</strong>
+                </div>
+            </div>
+            
+            <a href="/dashboard" class="btn primary"><i class="fas fa-tachometer-alt"></i> Open Dashboard</a>
+            <a href="/debug" class="btn"><i class="fas fa-cog"></i> System Info</a>
         </div>
         
         <div class="features">
             <div class="feature-card">
                 <div class="feature-icon"><i class="fas fa-envelope-open-text"></i></div>
                 <h3>Real Gmail Integration</h3>
-                <p>Connect seamlessly to your actual Gmail account and manage real emails with advanced filtering, smart categorization, and intelligent priority detection.</p>
+                <p>Connect to your actual Gmail account with secure OAuth authentication and manage real unread emails with intelligent filtering.</p>
             </div>
             <div class="feature-card">
                 <div class="feature-icon"><i class="fas fa-robot"></i></div>
-                <h3>AI-Powered Intelligence</h3>
-                <p>Leverage cutting-edge OpenAI GPT technology for intelligent email classification, priority detection, and contextual understanding of your messages.</p>
+                <h3>Smart Classification</h3>
+                <p>Advanced AI-powered email prioritization that correctly identifies important emails while filtering out promotional content.</p>
             </div>
             <div class="feature-card">
                 <div class="feature-icon"><i class="fas fa-magic"></i></div>
-                <h3>Smart Auto-Replies</h3>
-                <p>Generate professional, personalized draft responses automatically. Save time with AI-crafted replies that understand context and maintain your professional tone.</p>
+                <h3>Auto-Draft Creation</h3>
+                <p>Generate professional draft responses for high-priority emails with contextual AI understanding and proper formatting.</p>
             </div>
         </div>
     </div>
@@ -729,221 +697,166 @@ def dashboard():
     return '''<!DOCTYPE html>
 <html>
 <head>
-    <title>Gmail Assistant - Professional Dashboard</title>
+    <title>Gmail Assistant - Dashboard</title>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body { 
             font-family: 'Inter', 'Segoe UI', sans-serif; 
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 50%, #f093fb 100%); 
+            background: linear-gradient(135deg, #1e40af 0%, #3b82f6 50%, #06b6d4 100%); 
             min-height: 100vh; 
-            color: white; 
-            position: relative;
+            color: #1f2937; 
         }
-        body::before {
-            content: '';
-            position: absolute;
-            top: 0; left: 0; right: 0; bottom: 0;
-            background: url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><defs><pattern id="dots" width="20" height="20" patternUnits="userSpaceOnUse"><circle cx="10" cy="10" r="1" fill="rgba(255,255,255,0.1)"/></pattern></defs><rect width="100" height="100" fill="url(%23dots)"/></svg>');
-            animation: float 25s ease-in-out infinite;
-        }
-        @keyframes float { 0%, 100% { transform: translateY(0px); } 50% { transform: translateY(-10px); } }
         
-        .container { max-width: 1400px; margin: 0 auto; padding: 30px 20px; position: relative; z-index: 2; }
+        .container { max-width: 1400px; margin: 0 auto; padding: 20px; }
         
         .header {
-            background: rgba(255,255,255,0.15);
-            padding: 30px 40px;
-            border-radius: 20px;
-            backdrop-filter: blur(20px);
-            margin-bottom: 40px;
-            border: 1px solid rgba(255,255,255,0.2);
-            box-shadow: 0 20px 40px rgba(0,0,0,0.1);
+            background: rgba(255,255,255,0.95);
+            padding: 30px;
+            border-radius: 15px;
+            margin-bottom: 30px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.1);
         }
         
         .header h1 {
             font-size: 2.5rem;
             font-weight: 800;
-            background: linear-gradient(45deg, #fff, #e8f4ff);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
+            color: #1f2937;
             margin-bottom: 10px;
         }
         
         .status-indicator {
-            background: linear-gradient(45deg, #00b894, #00cec9);
+            background: linear-gradient(135deg, #059669, #047857);
             color: white;
-            padding: 12px 25px;
-            border-radius: 50px;
+            padding: 8px 20px;
+            border-radius: 20px;
             font-weight: 600;
             display: inline-block;
-            animation: pulse 2s infinite;
-            box-shadow: 0 10px 25px rgba(0,184,148,0.3);
-        }
-        
-        @keyframes pulse {
-            0% { transform: scale(1); }
-            50% { transform: scale(1.05); }
-            100% { transform: scale(1); }
+            font-size: 0.9rem;
         }
         
         .stats-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-            gap: 30px;
-            margin-bottom: 50px;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 20px;
+            margin-bottom: 40px;
         }
         
         .stat-card {
-            background: rgba(255,255,255,0.12);
-            padding: 40px 30px;
-            border-radius: 20px;
-            backdrop-filter: blur(15px);
-            border: 1px solid rgba(255,255,255,0.2);
+            background: rgba(255,255,255,0.95);
+            padding: 30px;
+            border-radius: 15px;
             text-align: center;
-            transition: all 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
-            position: relative;
-            overflow: hidden;
+            transition: all 0.3s ease;
+            box-shadow: 0 5px 20px rgba(0,0,0,0.1);
+            border-left: 4px solid var(--accent-color);
         }
         
-        .stat-card::before {
-            content: '';
-            position: absolute;
-            top: 0; left: 0; right: 0;
-            height: 4px;
-            background: var(--accent-color);
-            transform: scaleX(0);
-            transition: transform 0.3s ease;
+        .stat-card:hover { 
+            transform: translateY(-5px); 
+            box-shadow: 0 15px 35px rgba(0,0,0,0.15); 
         }
-        
-        .stat-card:hover::before { transform: scaleX(1); }
-        .stat-card:hover { transform: translateY(-10px) scale(1.02); background: rgba(255,255,255,0.18); }
         
         .stat-number {
-            font-size: 3.5rem;
+            font-size: 3rem;
             font-weight: 800;
-            margin-bottom: 15px;
-            background: linear-gradient(45deg, var(--accent-color), var(--accent-secondary));
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
+            margin-bottom: 10px;
+            color: var(--accent-color);
         }
         
-        .stat-label { font-size: 1.2rem; font-weight: 600; opacity: 0.9; }
+        .stat-label { 
+            font-size: 1.1rem; 
+            font-weight: 600; 
+            color: #4b5563;
+        }
         
-        /* Priority-specific colors */
-        .stat-card.total { --accent-color: #74b9ff; --accent-secondary: #0984e3; }
-        .stat-card.direct { --accent-color: #a29bfe; --accent-secondary: #6c5ce7; }
-        .stat-card.high { --accent-color: #ff6b6b; --accent-secondary: #ee5a24; }
+        /* Clean, readable colors */
+        .stat-card.total { --accent-color: #3b82f6; }
+        .stat-card.direct { --accent-color: #8b5cf6; }
+        .stat-card.high { --accent-color: #ef4444; }
         
         .main-action {
             text-align: center;
-            margin: 50px 0;
+            margin: 40px 0;
         }
         
         .create-drafts-btn {
-            background: linear-gradient(135deg, #ff6b6b, #ee5a24);
+            background: linear-gradient(135deg, #ef4444, #dc2626);
             color: white;
-            padding: 25px 50px;
+            padding: 18px 40px;
             border: none;
-            border-radius: 60px;
-            font-size: 1.3rem;
+            border-radius: 12px;
+            font-size: 1.2rem;
             font-weight: 700;
             text-decoration: none;
             display: inline-block;
-            transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
-            box-shadow: 0 20px 40px rgba(255,107,107,0.4);
+            transition: all 0.3s ease;
+            box-shadow: 0 8px 25px rgba(239,68,68,0.3);
             text-transform: uppercase;
-            letter-spacing: 1px;
-            position: relative;
-            overflow: hidden;
+            letter-spacing: 0.5px;
         }
         
-        .create-drafts-btn::before {
-            content: '';
-            position: absolute;
-            top: 0; left: -100%;
-            width: 100%; height: 100%;
-            background: linear-gradient(90deg, transparent, rgba(255,255,255,0.2), transparent);
-            transition: left 0.5s;
-        }
-        
-        .create-drafts-btn:hover::before { left: 100%; }
         .create-drafts-btn:hover { 
-            transform: translateY(-5px) scale(1.05); 
-            box-shadow: 0 30px 60px rgba(255,107,107,0.5); 
+            transform: translateY(-3px); 
+            box-shadow: 0 15px 35px rgba(239,68,68,0.4); 
         }
         
         .refresh-btn {
-            background: linear-gradient(135deg, #74b9ff, #0984e3);
+            background: linear-gradient(135deg, #3b82f6, #1e40af);
             color: white;
-            padding: 15px 30px;
+            padding: 10px 20px;
             border: none;
-            border-radius: 50px;
+            border-radius: 8px;
             font-weight: 600;
             cursor: pointer;
             transition: all 0.3s ease;
-            margin-bottom: 30px;
+            margin-left: 15px;
         }
         
         .refresh-btn:hover { 
             transform: translateY(-2px);
-            box-shadow: 0 10px 25px rgba(116,185,255,0.4);
+            box-shadow: 0 5px 15px rgba(59,130,246,0.3);
         }
         
         .emails-section {
-            background: rgba(255,255,255,0.1);
-            padding: 40px;
-            border-radius: 25px;
-            backdrop-filter: blur(15px);
-            border: 1px solid rgba(255,255,255,0.2);
+            background: rgba(255,255,255,0.95);
+            padding: 30px;
+            border-radius: 15px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.1);
         }
         
         .section-title {
-            font-size: 2rem;
+            font-size: 1.8rem;
             font-weight: 700;
-            margin-bottom: 30px;
+            margin-bottom: 25px;
             display: flex;
             align-items: center;
-            gap: 15px;
+            gap: 10px;
+            color: #1f2937;
         }
         
         .email-card {
-            background: rgba(255,255,255,0.08);
-            margin-bottom: 25px;
-            padding: 30px;
-            border-radius: 20px;
-            border-left: 5px solid var(--priority-color);
-            backdrop-filter: blur(10px);
+            background: #ffffff;
+            margin-bottom: 20px;
+            padding: 25px;
+            border-radius: 12px;
+            border-left: 4px solid var(--priority-color);
             transition: all 0.3s ease;
-            position: relative;
-            overflow: hidden;
-        }
-        
-        .email-card::before {
-            content: '';
-            position: absolute;
-            top: 0; right: 0;
-            width: 100px; height: 100px;
-            background: radial-gradient(circle, var(--priority-color), transparent);
-            opacity: 0.1;
-            transition: all 0.3s ease;
+            box-shadow: 0 3px 10px rgba(0,0,0,0.05);
+            cursor: pointer;
         }
         
         .email-card:hover {
-            transform: translateX(10px);
-            background: rgba(255,255,255,0.15);
+            transform: translateX(5px);
+            box-shadow: 0 8px 25px rgba(0,0,0,0.1);
         }
         
-        .email-card:hover::before {
-            width: 200px; height: 200px;
-        }
-        
-        /* Priority Colors */
-        .email-card.critical { --priority-color: #ff4757; }
-        .email-card.high { --priority-color: #ff6348; }
-        .email-card.medium { --priority-color: #feca57; }
-        .email-card.low { --priority-color: #48dbfb; }
+        /* High contrast, readable priority colors */
+        .email-card.critical { --priority-color: #dc2626; }
+        .email-card.high { --priority-color: #ea580c; }
+        .email-card.medium { --priority-color: #ca8a04; }
+        .email-card.low { --priority-color: #059669; }
         
         .email-header {
             display: flex;
@@ -951,92 +864,94 @@ def dashboard():
             align-items: flex-start;
             margin-bottom: 15px;
             flex-wrap: wrap;
-            gap: 15px;
+            gap: 10px;
         }
         
         .email-subject {
-            font-size: 1.3rem;
+            font-size: 1.2rem;
             font-weight: 700;
-            color: white;
+            color: #1f2937;
             flex: 1;
-            min-width: 250px;
+            min-width: 200px;
         }
         
         .priority-badge {
             background: var(--priority-color);
             color: white;
-            padding: 8px 16px;
-            border-radius: 25px;
+            padding: 6px 12px;
+            border-radius: 20px;
             font-weight: 600;
-            font-size: 0.9rem;
+            font-size: 0.85rem;
             text-transform: uppercase;
-            letter-spacing: 1px;
-            box-shadow: 0 5px 15px rgba(0,0,0,0.2);
+            letter-spacing: 0.5px;
         }
         
         .email-meta {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-            gap: 15px;
-            margin-bottom: 20px;
-            opacity: 0.9;
+            gap: 10px;
+            margin-bottom: 15px;
+            color: #6b7280;
+            font-size: 0.9rem;
         }
         
         .meta-item {
             display: flex;
             align-items: center;
-            gap: 10px;
+            gap: 8px;
         }
         
         .meta-item i {
             color: var(--priority-color);
-            width: 16px;
+            width: 14px;
         }
         
         .email-snippet {
-            background: rgba(255,255,255,0.05);
-            padding: 20px;
-            border-radius: 15px;
-            margin: 20px 0;
-            font-style: italic;
-            line-height: 1.6;
+            background: #f8fafc;
+            padding: 15px;
+            border-radius: 8px;
+            margin: 15px 0;
+            color: #4b5563;
+            line-height: 1.5;
             border-left: 3px solid var(--priority-color);
         }
         
         .draft-btn {
             background: linear-gradient(135deg, var(--priority-color), var(--priority-color));
             color: white;
-            padding: 12px 25px;
+            padding: 10px 20px;
             border: none;
-            border-radius: 30px;
+            border-radius: 8px;
             font-weight: 600;
             cursor: pointer;
             transition: all 0.3s ease;
-            margin-top: 15px;
+            margin-top: 10px;
+            font-size: 0.9rem;
         }
         
         .draft-btn:hover {
             transform: translateY(-2px);
-            box-shadow: 0 10px 25px rgba(0,0,0,0.2);
+            box-shadow: 0 5px 15px rgba(0,0,0,0.2);
         }
         
         .no-emails {
             text-align: center;
-            padding: 60px 20px;
-            opacity: 0.7;
+            padding: 40px 20px;
+            color: #6b7280;
         }
         
         .loading {
             text-align: center;
             padding: 40px;
+            color: #6b7280;
         }
         
         .spinner {
-            border: 4px solid rgba(255,255,255,0.3);
+            border: 3px solid #e5e7eb;
             border-radius: 50%;
-            border-top: 4px solid white;
-            width: 50px;
-            height: 50px;
+            border-top: 3px solid #3b82f6;
+            width: 40px;
+            height: 40px;
             animation: spin 1s linear infinite;
             margin: 20px auto;
         }
@@ -1048,30 +963,112 @@ def dashboard():
         
         .notification {
             position: fixed;
-            top: 30px;
-            right: 30px;
-            background: linear-gradient(135deg, #00b894, #00cec9);
+            top: 20px;
+            right: 20px;
+            background: #10b981;
             color: white;
-            padding: 20px 30px;
-            border-radius: 15px;
-            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+            padding: 15px 25px;
+            border-radius: 10px;
+            box-shadow: 0 10px 25px rgba(0,0,0,0.1);
             transform: translateX(400px);
             transition: transform 0.3s ease;
             z-index: 1000;
+            font-weight: 600;
         }
         
         .notification.show {
             transform: translateX(0);
         }
         
+        .notification.error {
+            background: #ef4444;
+        }
+        
+        /* Email Detail Modal */
+        .modal {
+            display: none;
+            position: fixed;
+            z-index: 1000;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0,0,0,0.5);
+            backdrop-filter: blur(5px);
+        }
+        
+        .modal-content {
+            background-color: white;
+            margin: 5% auto;
+            padding: 0;
+            border-radius: 15px;
+            width: 90%;
+            max-width: 800px;
+            max-height: 80vh;
+            overflow-y: auto;
+            box-shadow: 0 25px 50px rgba(0,0,0,0.25);
+        }
+        
+        .modal-header {
+            background: linear-gradient(135deg, #3b82f6, #1e40af);
+            color: white;
+            padding: 25px 30px;
+            border-radius: 15px 15px 0 0;
+            position: relative;
+        }
+        
+        .modal-header h2 {
+            margin: 0;
+            font-size: 1.5rem;
+            font-weight: 700;
+        }
+        
+        .close {
+            position: absolute;
+            right: 20px;
+            top: 20px;
+            color: white;
+            font-size: 28px;
+            font-weight: bold;
+            cursor: pointer;
+            width: 40px;
+            height: 40px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 50%;
+            transition: background-color 0.3s;
+        }
+        
+        .close:hover {
+            background-color: rgba(255,255,255,0.2);
+        }
+        
+        .modal-body {
+            padding: 30px;
+        }
+        
+        .email-full-content {
+            background: #f8fafc;
+            padding: 20px;
+            border-radius: 10px;
+            margin: 20px 0;
+            border-left: 4px solid #3b82f6;
+            white-space: pre-wrap;
+            line-height: 1.6;
+            color: #374151;
+        }
+        
         @media (max-width: 768px) {
-            .container { padding: 20px 15px; }
-            .header { padding: 25px 20px; }
+            .container { padding: 15px; }
+            .header { padding: 20px; }
             .header h1 { font-size: 2rem; }
-            .stats-grid { grid-template-columns: 1fr; gap: 20px; }
-            .create-drafts-btn { padding: 20px 40px; font-size: 1.1rem; }
+            .stats-grid { grid-template-columns: 1fr; gap: 15px; }
+            .create-drafts-btn { padding: 15px 30px; font-size: 1rem; }
             .email-header { flex-direction: column; align-items: stretch; }
             .email-meta { grid-template-columns: 1fr; }
+            .modal-content { width: 95%; margin: 2% auto; }
+            .modal-body { padding: 20px; }
         }
     </style>
 </head>
@@ -1080,7 +1077,7 @@ def dashboard():
         <div class="header">
             <h1><i class="fas fa-tachometer-alt"></i> Gmail Dashboard</h1>
             <div class="status-indicator" id="statusIndicator">
-                <i class="fas fa-satellite-dish"></i> Gmail Connected - Showing REAL emails
+                <i class="fas fa-satellite-dish"></i> Loading status...
             </div>
         </div>
         
@@ -1120,6 +1117,21 @@ def dashboard():
         </div>
     </div>
     
+    <!-- Email Detail Modal -->
+    <div id="emailModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 id="modalTitle">Email Details</h2>
+                <span class="close" onclick="closeModal()">&times;</span>
+            </div>
+            <div class="modal-body">
+                <div id="modalEmailMeta"></div>
+                <div id="modalEmailContent" class="email-full-content"></div>
+                <div id="modalEmailActions"></div>
+            </div>
+        </div>
+    </div>
+    
     <div class="notification" id="notification"></div>
     
     <script>
@@ -1149,10 +1161,10 @@ def dashboard():
                 const statusEl = document.getElementById('statusIndicator');
                 if (data.gmail_connected) {
                     statusEl.innerHTML = '<i class="fas fa-satellite-dish"></i> Gmail Connected - Showing REAL emails';
-                    statusEl.style.background = 'linear-gradient(45deg, #00b894, #00cec9)';
+                    statusEl.style.background = 'linear-gradient(135deg, #059669, #047857)';
                 } else {
                     statusEl.innerHTML = '<i class="fas fa-exclamation-triangle"></i> DEMO MODE - Configure API';
-                    statusEl.style.background = 'linear-gradient(45deg, #ff6b6b, #ee5a24)';
+                    statusEl.style.background = 'linear-gradient(135deg, #dc2626, #b91c1c)';
                 }
                 
                 // Display emails
@@ -1170,12 +1182,12 @@ def dashboard():
             
             if (emails.length === 0) {
                 emailsList.innerHTML = 
-                    '<div class="no-emails"><i class="fas fa-inbox"></i><h3>No emails found</h3><p>Your inbox is clean!</p></div>';
+                    '<div class="no-emails"><i class="fas fa-inbox"></i><h3>No unread emails</h3><p>Your inbox is clean!</p></div>';
                 return;
             }
             
             emailsList.innerHTML = emails.map(email => `
-                <div class="email-card ${email.priority}">
+                <div class="email-card ${email.priority}" onclick="openEmailModal('${email.id}')">
                     <div class="email-header">
                         <div class="email-subject">${email.subject}</div>
                         <div class="priority-badge">${email.priority.toUpperCase()}</div>
@@ -1198,14 +1210,50 @@ def dashboard():
                             <span>${email.email_type}</span>
                         </div>
                     </div>
-                    <div class="email-snippet">${email.snippet}</div>
+                    <div class="email-snippet">${email.display_snippet || email.snippet}</div>
                     ${(email.priority === 'high' || email.priority === 'critical') ? 
-                        `<button class="draft-btn" onclick="createDraft('${email.id}')">
+                        `<button class="draft-btn" onclick="event.stopPropagation(); createDraft('${email.id}')">
                             <i class="fas fa-pen"></i> Create Draft Reply
                         </button>` : ''
                     }
                 </div>
             `).join('');
+        }
+        
+        function openEmailModal(emailId) {
+            const email = emailsData.find(e => e.id === emailId);
+            if (!email) return;
+            
+            document.getElementById('modalTitle').textContent = email.subject;
+            document.getElementById('modalEmailMeta').innerHTML = `
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; margin-bottom: 20px;">
+                    <div><strong>From:</strong> ${email.from_email}</div>
+                    <div><strong>Date:</strong> ${email.date} ${email.time}</div>
+                    <div><strong>Priority:</strong> <span style="color: var(--priority-color);">${email.priority.toUpperCase()}</span></div>
+                    <div><strong>Type:</strong> ${email.email_type}</div>
+                </div>
+                ${email.urgency_reason ? `<div style="background: #fef3c7; padding: 10px; border-radius: 8px; margin-bottom: 15px;"><strong>Classification reason:</strong> ${email.urgency_reason}</div>` : ''}
+            `;
+            document.getElementById('modalEmailContent').textContent = email.body || email.snippet;
+            document.getElementById('modalEmailActions').innerHTML = 
+                (email.priority === 'high' || email.priority === 'critical') ? 
+                `<button class="draft-btn" onclick="createDraft('${email.id}')">
+                    <i class="fas fa-pen"></i> Create Draft Reply
+                </button>` : '';
+            
+            document.getElementById('emailModal').style.display = 'block';
+        }
+        
+        function closeModal() {
+            document.getElementById('emailModal').style.display = 'none';
+        }
+        
+        // Close modal when clicking outside
+        window.onclick = function(event) {
+            const modal = document.getElementById('emailModal');
+            if (event.target == modal) {
+                closeModal();
+            }
         }
         
         async function createDraft(emailId) {
@@ -1383,7 +1431,15 @@ def debug():
                 'OPENAI_API_KEY': '✅ Set' if os.getenv('OPENAI_API_KEY') else '❌ Missing'
             },
             'Stats': stats['stats'],
-            'Sample Emails': emails[:3] if emails else []
+            'Sample Emails': emails[:3] if emails else [],
+            'Classification Examples': [
+                {
+                    'subject': email.get('subject', ''),
+                    'sender': email.get('from_email', ''),
+                    'priority': email.get('priority', ''),
+                    'reason': email.get('urgency_reason', '')
+                } for email in emails[:5]
+            ]
         }
         
         return f'''<!DOCTYPE html>
@@ -1391,18 +1447,21 @@ def debug():
 <head>
     <title>Gmail Assistant - Debug Info</title>
     <style>
-        body {{ font-family: 'Courier New', monospace; background: #1a1a1a; color: #00ff00; padding: 20px; }}
-        .container {{ max-width: 1000px; margin: 0 auto; }}
-        .section {{ background: #2a2a2a; padding: 20px; margin: 20px 0; border-radius: 10px; border: 1px solid #333; }}
-        .success {{ color: #00ff00; }}
-        .error {{ color: #ff4444; }}
-        .warning {{ color: #ffaa00; }}
-        pre {{ background: #1a1a1a; padding: 15px; border-radius: 5px; overflow-x: auto; }}
-        h1, h2 {{ color: #00ccff; }}
+        body {{ font-family: 'Courier New', monospace; background: #0f172a; color: #10b981; padding: 20px; line-height: 1.6; }}
+        .container {{ max-width: 1200px; margin: 0 auto; }}
+        .section {{ background: #1e293b; padding: 25px; margin: 20px 0; border-radius: 12px; border: 1px solid #334155; }}
+        .success {{ color: #10b981; }}
+        .error {{ color: #ef4444; }}
+        .warning {{ color: #f59e0b; }}
+        pre {{ background: #0f172a; padding: 20px; border-radius: 8px; overflow-x: auto; border: 1px solid #334155; }}
+        h1, h2 {{ color: #06b6d4; margin-bottom: 15px; }}
         .back-btn {{ 
-            background: #00ccff; color: #1a1a1a; padding: 10px 20px; 
-            text-decoration: none; border-radius: 5px; font-weight: bold; 
+            background: #06b6d4; color: #0f172a; padding: 12px 24px; 
+            text-decoration: none; border-radius: 8px; font-weight: bold; 
+            display: inline-block; margin-bottom: 20px;
         }}
+        .stats {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; }}
+        .stat-item {{ background: #1e293b; padding: 15px; border-radius: 8px; border-left: 4px solid #10b981; }}
     </style>
 </head>
 <body>
@@ -1411,28 +1470,54 @@ def debug():
         <a href="/dashboard" class="back-btn">← Back to Dashboard</a>
         
         <div class="section">
-            <h2>System Status</h2>
+            <h2>🔍 System Status</h2>
+            <div class="stats">
+                <div class="stat-item">
+                    <strong>Gmail Connection:</strong><br>
+                    <span class="{'success' if assistant.gmail_connected else 'error'}">
+                        {'✅ CONNECTED' if assistant.gmail_connected else '❌ DISCONNECTED'}
+                    </span>
+                </div>
+                <div class="stat-item">
+                    <strong>AI Classification:</strong><br>
+                    <span class="{'success' if assistant.openai_available else 'warning'}">
+                        {'✅ ACTIVE' if assistant.openai_available else '⚠️ BASIC RULES'}
+                    </span>
+                </div>
+                <div class="stat-item">
+                    <strong>Email Count:</strong><br>
+                    <span class="success">{len(emails)} emails</span>
+                </div>
+                <div class="stat-item">
+                    <strong>High Priority:</strong><br>
+                    <span class="error">{stats['stats']['high_priority_count']} emails</span>
+                </div>
+            </div>
+        </div>
+        
+        <div class="section">
+            <h2>📊 Detailed Information</h2>
             <pre>{json.dumps(debug_info, indent=2)}</pre>
         </div>
         
         <div class="section">
-            <h2>Quick Links</h2>
-            <p><a href="/api/emails" style="color: #00ccff;">📧 View Raw Email API</a></p>
-            <p><a href="/" style="color: #00ccff;">🏠 Home Page</a></p>
-            <p><a href="/dashboard" style="color: #00ccff;">📊 Dashboard</a></p>
+            <h2>🔗 Quick Actions</h2>
+            <p><a href="/api/emails" style="color: #06b6d4;">📧 View Raw Email API Response</a></p>
+            <p><a href="/" style="color: #06b6d4;">🏠 Return to Home</a></p>
+            <p><a href="/dashboard" style="color: #06b6d4;">📊 Open Dashboard</a></p>
         </div>
     </div>
 </body>
 </html>'''
         
     except Exception as e:
-        return f'''<h1>Debug Error</h1><pre style="color: red;">{str(e)}</pre>'''
+        return f'''<h1 style="color: #ef4444;">Debug Error</h1><pre style="color: #ef4444;">{str(e)}</pre>'''
 
 if __name__ == '__main__':
-    print("🚀 Starting Enhanced Gmail Assistant...")
-    print("🔍 Checking Gmail Environment Variables:")
-    print(f"GMAIL_REFRESH_TOKEN exists: {bool(os.getenv('GMAIL_REFRESH_TOKEN'))}")
-    print(f"GMAIL_CLIENT_ID exists: {bool(os.getenv('GMAIL_CLIENT_ID'))}")
-    print(f"GMAIL_CLIENT_SECRET exists: {bool(os.getenv('GMAIL_CLIENT_SECRET'))}")
-    print(f"OPENAI_API_KEY exists: {bool(os.getenv('OPENAI_API_KEY'))}")
+    print("🚀 Starting FIXED Gmail Assistant...")
+    print("🔍 Environment Check:")
+    print(f"GMAIL_REFRESH_TOKEN: {bool(os.getenv('GMAIL_REFRESH_TOKEN'))}")
+    print(f"GMAIL_CLIENT_ID: {bool(os.getenv('GMAIL_CLIENT_ID'))}")
+    print(f"GMAIL_CLIENT_SECRET: {bool(os.getenv('GMAIL_CLIENT_SECRET'))}")
+    print(f"OPENAI_API_KEY: {bool(os.getenv('OPENAI_API_KEY'))}")
     app.run(debug=True)
