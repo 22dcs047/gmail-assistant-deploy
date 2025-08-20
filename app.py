@@ -1303,7 +1303,7 @@ LOGIN_TEMPLATE = '''
             </div>
             
             <button type="submit" class="login-btn">
-                <i class="fas fa-sign-in-alt"></i> Secure Login
+                <i class="fas fa-sign-in-alt"></i> Login
             </button>
         </form>
         
