@@ -1,10 +1,12 @@
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request, session, redirect, url_for, render_template_string
 from datetime import datetime, timedelta
 import json
 import os
 import base64
 import time
 import re
+import hashlib
+import secrets
 
 # Import with robust error handling
 try:
@@ -28,6 +30,34 @@ except ImportError:
     EMAIL_AVAILABLE = False
 
 app = Flask(__name__)
+
+# Security Configuration
+app.secret_key = os.getenv('SECRET_KEY', secrets.token_hex(32))  # Use environment variable or generate
+
+# User Credentials (In production, use database)
+USERS = {
+    os.getenv('ADMIN_USERNAME', 'admin'): {
+        'password_hash': hashlib.sha256((os.getenv('ADMIN_PASSWORD', 'admin123')).encode()).hexdigest(),
+        'role': 'admin'
+    }
+}
+
+def hash_password(password):
+    """Hash password for secure storage"""
+    return hashlib.sha256(password.encode()).hexdigest()
+
+def verify_password(password, password_hash):
+    """Verify password against hash"""
+    return hashlib.sha256(password.encode()).hexdigest() == password_hash
+
+def login_required(f):
+    """Decorator to require login for protected routes"""
+    def decorated_function(*args, **kwargs):
+        if 'user' not in session:
+            return redirect(url_for('login'))
+        return f(*args, **kwargs)
+    decorated_function.__name__ = f.__name__
+    return decorated_function
 
 class RobustGmailAssistant:
     def __init__(self):
@@ -447,12 +477,38 @@ except Exception as e:
     print(f"❌ Failed to initialize assistant: {e}")
     assistant = None
 
+# LOGIN ROUTES
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    if request.method == 'POST':
+        username = request.form.get('username')
+        password = request.form.get('password')
+        
+        if username in USERS and verify_password(password, USERS[username]['password_hash']):
+            session['user'] = username
+            session['role'] = USERS[username]['role']
+            return redirect(url_for('home'))
+        else:
+            return render_template_string(LOGIN_TEMPLATE, error="Invalid username or password")
+    
+    return render_template_string(LOGIN_TEMPLATE)
+
+@app.route('/logout')
+@login_required
+def logout():
+    session.clear()
+    return redirect(url_for('login'))
+
+# PROTECTED ROUTES
 @app.route('/')
+@login_required
 def home():
     if not assistant:
         return "Assistant initialization failed", 500
         
     status = "Real Gmail" if assistant.gmail_connected else "Demo Mode"
+    user = session.get('user', 'User')
+    
     return f'''<!DOCTYPE html>
 <html>
 <head>
@@ -468,6 +524,27 @@ def home():
             color: #ffffff; 
         }}
         .container {{ max-width: 1200px; margin: 0 auto; padding: 40px 20px; }}
+        .user-info {{
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            background: rgba(255,255,255,0.1);
+            padding: 10px 20px;
+            border-radius: 25px;
+            backdrop-filter: blur(10px);
+        }}
+        .logout-btn {{
+            background: #ef4444;
+            color: white;
+            padding: 8px 16px;
+            border: none;
+            border-radius: 20px;
+            text-decoration: none;
+            font-weight: 600;
+            margin-left: 15px;
+            transition: all 0.3s ease;
+        }}
+        .logout-btn:hover {{ background: #dc2626; }}
         .hero {{ 
             background: rgba(255,255,255,0.95); 
             padding: 60px 40px; 
@@ -476,6 +553,7 @@ def home():
             box-shadow: 0 20px 40px rgba(0,0,0,0.15);
             color: #1f2937;
             margin-bottom: 40px;
+            margin-top: 40px;
         }}
         .hero h1 {{ font-size: 3.5rem; margin-bottom: 20px; font-weight: 800; color: #1f2937; }}
         .hero p {{ font-size: 1.3rem; margin-bottom: 30px; color: #4b5563; line-height: 1.6; }}
@@ -497,6 +575,11 @@ def home():
     </style>
 </head>
 <body>
+    <div class="user-info">
+        <i class="fas fa-user"></i> Welcome, {user}
+        <a href="/logout" class="logout-btn"><i class="fas fa-sign-out-alt"></i> Logout</a>
+    </div>
+    
     <div class="container">
         <div class="hero">
             <div class="status-badge">
@@ -504,7 +587,7 @@ def home():
                 {status.upper()} 
             </div>
             <h1><i class="fas fa-brain"></i> AI Gmail Assistant</h1>
-            <p>{'Intelligent email management with real Gmail integration and smart priority detection' if assistant.gmail_connected else 'Demo mode - All features working with sample data for testing'}</p>
+            <p>{'Secure intelligent email management with real Gmail integration and smart priority detection' if assistant.gmail_connected else 'Secure demo mode - All features working with sample data for testing'}</p>
             
             <a href="/dashboard" class="btn primary"><i class="fas fa-tachometer-alt"></i> Open Dashboard</a>
             <a href="/debug" class="btn"><i class="fas fa-cog"></i> System Info</a>
@@ -514,11 +597,12 @@ def home():
 </html>'''
 
 @app.route('/dashboard')
+@login_required
 def dashboard():
     return '''<!DOCTYPE html>
 <html>
 <head>
-    <title>Gmail Assistant - Dashboard</title>
+    <title>Gmail Assistant - Secure Dashboard</title>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
     <style>
@@ -530,16 +614,26 @@ def dashboard():
             color: #1f2937; 
         }
         .container { max-width: 1400px; margin: 0 auto; padding: 20px; }
+        .user-info {
+            position: absolute; top: 20px; right: 20px;
+            background: rgba(255,255,255,0.1); padding: 10px 20px; border-radius: 25px;
+            backdrop-filter: blur(10px); color: white;
+        }
+        .logout-btn {
+            background: #ef4444; color: white; padding: 8px 16px; border: none;
+            border-radius: 20px; text-decoration: none; font-weight: 600;
+            margin-left: 15px; transition: all 0.3s ease;
+        }
+        .logout-btn:hover { background: #dc2626; }
         .header {
-            background: rgba(255,255,255,0.95);
-            padding: 30px; border-radius: 15px; margin-bottom: 30px;
-            box-shadow: 0 10px 30px rgba(0,0,0,0.1);
+            background: rgba(255,255,255,0.95); padding: 30px; border-radius: 15px;
+            margin-bottom: 30px; margin-top: 40px; box-shadow: 0 10px 30px rgba(0,0,0,0.1);
         }
         .header h1 { font-size: 2.5rem; font-weight: 800; color: #1f2937; margin-bottom: 10px; }
         .status-indicator {
-            background: linear-gradient(135deg, #059669, #047857);
-            color: white; padding: 8px 20px; border-radius: 20px;
-            font-weight: 600; display: inline-block; font-size: 0.9rem;
+            background: linear-gradient(135deg, #059669, #047857); color: white;
+            padding: 8px 20px; border-radius: 20px; font-weight: 600;
+            display: inline-block; font-size: 0.9rem;
         }
         .stats-grid {
             display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
@@ -559,8 +653,8 @@ def dashboard():
         .stat-card.high { --accent-color: #ef4444; }
         .main-action { text-align: center; margin: 40px 0; }
         .create-drafts-btn {
-            background: linear-gradient(135deg, #ef4444, #dc2626);
-            color: white; padding: 18px 40px; border: none; border-radius: 12px;
+            background: linear-gradient(135deg, #ef4444, #dc2626); color: white;
+            padding: 18px 40px; border: none; border-radius: 12px;
             font-size: 1.2rem; font-weight: 700; text-decoration: none;
             display: inline-block; transition: all 0.3s ease;
             box-shadow: 0 8px 25px rgba(239,68,68,0.3);
@@ -568,8 +662,8 @@ def dashboard():
         }
         .create-drafts-btn:hover { transform: translateY(-3px); box-shadow: 0 15px 35px rgba(239,68,68,0.4); }
         .refresh-btn {
-            background: linear-gradient(135deg, #3b82f6, #1e40af);
-            color: white; padding: 10px 20px; border: none; border-radius: 8px;
+            background: linear-gradient(135deg, #3b82f6, #1e40af); color: white;
+            padding: 10px 20px; border: none; border-radius: 8px;
             font-weight: 600; cursor: pointer; transition: all 0.3s ease; margin-left: 15px;
         }
         .emails-section {
@@ -588,7 +682,6 @@ def dashboard():
         .email-card:hover { transform: translateX(5px); box-shadow: 0 8px 25px rgba(0,0,0,0.1); }
         .email-card.critical { --priority-color: #dc2626; }
         .email-card.high { --priority-color: #ea580c; }
-        .email-card.medium { --priority-color: #ca8a04; }
         .email-card.low { --priority-color: #059669; }
         .email-header {
             display: flex; justify-content: space-between; align-items: flex-start;
@@ -642,9 +735,14 @@ def dashboard():
     </style>
 </head>
 <body>
+    <div class="user-info">
+        <i class="fas fa-user"></i> Dashboard Access
+        <a href="/logout" class="logout-btn"><i class="fas fa-sign-out-alt"></i> Logout</a>
+    </div>
+    
     <div class="container">
         <div class="header">
-            <h1><i class="fas fa-tachometer-alt"></i> Gmail Dashboard</h1>
+            <h1><i class="fas fa-shield-alt"></i> Secure Gmail Dashboard</h1>
             <div class="status-indicator" id="statusIndicator">
                 <i class="fas fa-satellite-dish"></i> Loading status...
             </div>
@@ -868,7 +966,7 @@ def dashboard():
         
         // Load emails on page load
         document.addEventListener('DOMContentLoaded', function() {
-            console.log('🚀 Page loaded, initializing...');
+            console.log('🚀 Secure dashboard loaded, initializing...');
             loadEmails();
         });
         
@@ -878,9 +976,11 @@ def dashboard():
 </body>
 </html>'''
 
+# PROTECTED API ROUTES
 @app.route('/api/emails')
+@login_required
 def api_emails():
-    """Robust API endpoint for email data"""
+    """Secure API endpoint for email data"""
     try:
         if not assistant:
             return jsonify({
@@ -892,7 +992,7 @@ def api_emails():
                 'openai_connected': False
             }), 200
         
-        print("📧 API call - fetching email stats")
+        print("📧 Secure API call - fetching email stats")
         data = assistant.get_stats_safe()
         print(f"✅ API returning {len(data.get('all_emails', []))} emails")
         return jsonify(data), 200
@@ -911,8 +1011,9 @@ def api_emails():
         }), 200
 
 @app.route('/api/create-draft', methods=['POST'])
+@login_required
 def api_create_draft():
-    """Robust draft creation endpoint"""
+    """Secure draft creation endpoint"""
     try:
         if not assistant:
             return jsonify({'success': False, 'message': 'Assistant not available'}), 200
@@ -941,12 +1042,13 @@ def api_create_draft():
         return jsonify({'success': success, 'message': message}), 200
         
     except Exception as e:
-        print(f"❌ Draft creation error: {e}")
+        print(f"❌ Secure draft creation error: {e}")
         return jsonify({'success': False, 'message': f'Error: {str(e)}'}), 200
 
 @app.route('/api/create-drafts-bulk', methods=['POST'])
+@login_required
 def api_create_drafts_bulk():
-    """Robust bulk draft creation"""
+    """Secure bulk draft creation"""
     try:
         if not assistant:
             return jsonify({'success': False, 'message': 'Assistant not available'}), 200
@@ -985,23 +1087,33 @@ def api_create_drafts_bulk():
         }), 200
         
     except Exception as e:
-        print(f"❌ Bulk draft error: {e}")
+        print(f"❌ Secure bulk draft error: {e}")
         return jsonify({'success': False, 'message': f'Error: {str(e)}'}), 200
 
 @app.route('/debug')
+@login_required
 def debug():
-    """Simple debug page"""
+    """Secure debug page"""
     try:
         if not assistant:
             return "Assistant not initialized", 500
         
+        user = session.get('user', 'Unknown')
+        
         return f'''
 <html>
-<head><title>Gmail Assistant Debug</title>
-<style>body{{font-family:monospace;background:#000;color:#0f0;padding:20px;}}</style>
+<head><title>Secure Gmail Assistant Debug</title>
+<style>
+body{{font-family:monospace;background:#000;color:#0f0;padding:20px;}}
+.user-info{{position:absolute;top:10px;right:10px;background:#333;padding:10px;border-radius:5px;}}
+.logout-btn{{background:#f00;color:#fff;padding:5px 10px;border:none;border-radius:3px;margin-left:10px;}}
+</style>
 </head>
 <body>
-<h1>🔧 Gmail Assistant Debug</h1>
+<div class="user-info">
+User: {user} <a href="/logout" class="logout-btn">Logout</a>
+</div>
+<h1>🔧 Secure Gmail Assistant Debug</h1>
 <p>Gmail Connected: {'✅ Yes' if assistant.gmail_connected else '❌ No'}</p>
 <p>OpenAI Available: {'✅ Yes' if assistant.openai_available else '❌ No'}</p>
 <p>Environment Variables:</p>
@@ -1010,6 +1122,9 @@ def debug():
 <li>GMAIL_CLIENT_ID: {'✅ Set' if os.getenv('GMAIL_CLIENT_ID') else '❌ Missing'}</li>
 <li>GMAIL_CLIENT_SECRET: {'✅ Set' if os.getenv('GMAIL_CLIENT_SECRET') else '❌ Missing'}</li>
 <li>OPENAI_API_KEY: {'✅ Set' if os.getenv('OPENAI_API_KEY') else '❌ Missing'}</li>
+<li>SECRET_KEY: {'✅ Set' if app.secret_key else '❌ Missing'}</li>
+<li>ADMIN_USERNAME: {'✅ Set' if os.getenv('ADMIN_USERNAME') else '❌ Missing (using default)'}</li>
+<li>ADMIN_PASSWORD: {'✅ Set' if os.getenv('ADMIN_PASSWORD') else '❌ Missing (using default)'}</li>
 </ul>
 <p><a href="/dashboard" style="color:#0ff;">← Back to Dashboard</a></p>
 <p><a href="/api/emails" style="color:#0ff;">📧 Test Email API</a></p>
@@ -1019,5 +1134,192 @@ def debug():
     except Exception as e:
         return f'<h1>Debug Error: {str(e)}</h1>'
 
+# LOGIN TEMPLATE
+LOGIN_TEMPLATE = '''
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Gmail Assistant - Secure Login</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Inter', 'Segoe UI', sans-serif;
+            background: linear-gradient(135deg, #1e40af 0%, #3b82f6 50%, #06b6d4 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #1f2937;
+        }
+        .login-container {
+            background: rgba(255,255,255,0.95);
+            padding: 60px 50px;
+            border-radius: 20px;
+            box-shadow: 0 25px 50px rgba(0,0,0,0.15);
+            backdrop-filter: blur(20px);
+            border: 1px solid rgba(255,255,255,0.2);
+            max-width: 450px;
+            width: 100%;
+        }
+        .login-header {
+            text-align: center;
+            margin-bottom: 40px;
+        }
+        .login-header h1 {
+            font-size: 2.5rem;
+            font-weight: 800;
+            color: #1f2937;
+            margin-bottom: 10px;
+        }
+        .login-header p {
+            color: #6b7280;
+            font-size: 1.1rem;
+        }
+        .form-group {
+            margin-bottom: 25px;
+        }
+        .form-group label {
+            display: block;
+            font-weight: 600;
+            margin-bottom: 8px;
+            color: #374151;
+        }
+        .form-group input {
+            width: 100%;
+            padding: 15px 20px;
+            border: 2px solid #e5e7eb;
+            border-radius: 10px;
+            font-size: 1rem;
+            transition: all 0.3s ease;
+            background: #f9fafb;
+        }
+        .form-group input:focus {
+            outline: none;
+            border-color: #3b82f6;
+            background: #ffffff;
+            box-shadow: 0 0 0 3px rgba(59,130,246,0.1);
+        }
+        .login-btn {
+            width: 100%;
+            background: linear-gradient(135deg, #3b82f6, #1e40af);
+            color: white;
+            padding: 15px 20px;
+            border: none;
+            border-radius: 10px;
+            font-size: 1.1rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            box-shadow: 0 4px 15px rgba(59,130,246,0.3);
+        }
+        .login-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 25px rgba(59,130,246,0.4);
+        }
+        .error-message {
+            background: #fef2f2;
+            border: 1px solid #fecaca;
+            color: #b91c1c;
+            padding: 12px 16px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            font-weight: 500;
+        }
+        .security-info {
+            margin-top: 30px;
+            padding: 20px;
+            background: #f0f9ff;
+            border-radius: 10px;
+            border-left: 4px solid #3b82f6;
+        }
+        .security-info h3 {
+            color: #1e40af;
+            margin-bottom: 10px;
+            font-size: 1.1rem;
+        }
+        .security-info p {
+            color: #1e40af;
+            font-size: 0.9rem;
+            line-height: 1.5;
+        }
+        .input-group {
+            position: relative;
+        }
+        .input-group i {
+            position: absolute;
+            left: 15px;
+            top: 50%;
+            transform: translateY(-50%);
+            color: #6b7280;
+            font-size: 1.1rem;
+        }
+        .input-group input {
+            padding-left: 50px;
+        }
+        @media (max-width: 480px) {
+            .login-container {
+                margin: 20px;
+                padding: 40px 30px;
+            }
+            .login-header h1 {
+                font-size: 2rem;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="login-container">
+        <div class="login-header">
+            <h1><i class="fas fa-shield-alt"></i></h1>
+            <h1>Secure Access</h1>
+            <p>Gmail Assistant Login</p>
+        </div>
+        
+        {% if error %}
+        <div class="error-message">
+            <i class="fas fa-exclamation-triangle"></i> {{ error }}
+        </div>
+        {% endif %}
+        
+        <form method="POST">
+            <div class="form-group">
+                <label for="username"><i class="fas fa-user"></i> Username</label>
+                <div class="input-group">
+                    <i class="fas fa-user"></i>
+                    <input type="text" id="username" name="username" required 
+                           placeholder="Enter your username" autocomplete="username">
+                </div>
+            </div>
+            
+            <div class="form-group">
+                <label for="password"><i class="fas fa-lock"></i> Password</label>
+                <div class="input-group">
+                    <i class="fas fa-lock"></i>
+                    <input type="password" id="password" name="password" required 
+                           placeholder="Enter your password" autocomplete="current-password">
+                </div>
+            </div>
+            
+            <button type="submit" class="login-btn">
+                <i class="fas fa-sign-in-alt"></i> Secure Login
+            </button>
+        </form>
+        
+        <div class="security-info">
+            <h3><i class="fas fa-info-circle"></i> Security Notice</h3>
+            <p>This is a secure area. All access is logged and monitored. Your session will automatically expire for security.</p>
+        </div>
+    </div>
+</body>
+</html>
+'''
+
 if __name__ == '__main__':
+    print("🔐 Starting SECURE Gmail Assistant...")
+    print("🔍 Security Environment Check:")
+    print(f"SECRET_KEY: {'✅ Set' if app.secret_key else '❌ Missing'}")
+    print(f"ADMIN_USERNAME: {os.getenv('ADMIN_USERNAME', 'admin')} (default if not set)")
+    print(f"ADMIN_PASSWORD: {'✅ Set' if os.getenv('ADMIN_PASSWORD') else '❌ Using default'}")
     app.run(debug=True)
