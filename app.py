@@ -494,9 +494,6 @@ def home():
             margin: 10px; display: inline-block; 
             box-shadow: 0 4px 15px rgba({'5,150,105' if assistant.gmail_connected else '220,38,38'},0.3);
         }}
-        .status-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px; margin: 30px 0; }}
-        .status-item {{ background: rgba(255,255,255,0.1); padding: 20px; border-radius: 10px; text-align: center; }}
-        .status-item strong {{ display: block; font-size: 1.2rem; margin-top: 5px; }}
     </style>
 </head>
 <body>
@@ -508,21 +505,6 @@ def home():
             </div>
             <h1><i class="fas fa-brain"></i> AI Gmail Assistant</h1>
             <p>{'Intelligent email management with real Gmail integration and smart priority detection' if assistant.gmail_connected else 'Demo mode - All features working with sample data for testing'}</p>
-            
-            <div class="status-grid">
-                <div class="status-item">
-                    Gmail Status
-                    <strong>{'✅ CONNECTED' if assistant.gmail_connected else '📋 DEMO MODE'}</strong>
-                </div>
-                <div class="status-item">
-                    AI Classification
-                    <strong>{'✅ ACTIVE' if assistant.openai_available else '📋 RULE-BASED'}</strong>
-                </div>
-                <div class="status-item">
-                    Draft Creation
-                    <strong>{'✅ ENABLED' if assistant.gmail_connected else '📋 DEMO'}</strong>
-                </div>
-            </div>
             
             <a href="/dashboard" class="btn primary"><i class="fas fa-tachometer-alt"></i> Open Dashboard</a>
             <a href="/debug" class="btn"><i class="fas fa-cog"></i> System Info</a>
