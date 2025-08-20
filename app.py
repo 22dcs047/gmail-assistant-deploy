@@ -1,4 +1,172 @@
-from flask import Flask, jsonify, request, session, redirect, url_for, render_template_string
+# ALL REMAINING API ROUTES
+@app.route('/api/create-draft', methods=['POST'])
+@login_required
+def api_create_draft():
+    """Secure draft creation endpoint"""
+    try:
+        if not assistant:
+            return jsonify({'success': False, 'message': 'Assistant not available'}), 200
+        
+        data = request.get_json()
+        if not data:
+            return jsonify({'success': False, 'message': 'No data provided'}), 200
+        
+        email_id = data.get('email_id')
+        if not email_id:
+            return jsonify({'success': False, 'message': 'Email ID required'}), 200
+        
+        # Find email safely
+        emails = assistant.get_emails_with_timeout()
+        email = None
+        for e in emails:
+            if e.get('id') == email_id:
+                email = e
+                break
+        
+        if not email:
+            return jsonify({'success': False, 'message': 'Email not found'}), 200
+        
+        # Create draft
+        success, message = assistant.create_draft_safe(email)
+        return jsonify({'success': success, 'message': message}), 200
+        
+    except Exception as e:
+        print(f"❌ Secure draft creation error: {e}")
+        return jsonify({'success': False, 'message': f'Error: {str(e)}'}), 200
+
+@app.route('/api/create-drafts-bulk', methods=['POST'])
+@login_required
+def api_create_drafts_bulk():
+    """Secure bulk draft creation"""
+    try:
+        if not assistant:
+            return jsonify({'success': False, 'message': 'Assistant not available'}), 200
+        
+        data = request.get_json()
+        if not data:
+            return jsonify({'success': False, 'message': 'No data provided'}), 200
+        
+        email_ids = data.get('email_ids', [])
+        if not email_ids:
+            return jsonify({'success': False, 'message': 'No email IDs provided'}), 200
+        
+        emails = assistant.get_emails_with_timeout()
+        created_count = 0
+        errors = []
+        
+        for email_id in email_ids[:5]:  # Limit to prevent timeout
+            email = None
+            for e in emails:
+                if e.get('id') == email_id:
+                    email = e
+                    break
+            
+            if email:
+                success, message = assistant.create_draft_safe(email)
+                if success:
+                    created_count += 1
+                else:
+                    errors.append(message)
+        
+        return jsonify({
+            'success': created_count > 0,
+            'created_count': created_count,
+            'total_requested': len(email_ids),
+            'errors': errors
+        }), 200
+        
+    except Exception as e:
+        print(f"❌ Secure bulk draft error: {e}")
+        return jsonify({'success': False, 'message': f'Error: {str(e)}'}), 200
+
+@app.route('/debug')
+@login_required
+def debug():
+    """Secure debug page with 2FA info"""
+    try:
+        if not assistant:
+            return "Assistant not initialized", 500
+        
+        user = session.get('user', 'Unknown')
+        auth_time = session.get('auth_time', 'Unknown')
+        
+        return f'''
+<html>
+<head><title>Secure Gmail Assistant Debug (2FA Protected)</title>
+<style>
+body{{font-family:monospace;background:#000;color:#0f0;padding:20px;line-height:1.6;}}
+.user-info{{position:absolute;top:10px;right:10px;background:#333;padding:15px;border-radius:5px;}}
+.logout-btn{{background:#f00;color:#fff;padding:5px 10px;border:none;border-radius:3px;margin-left:10px;text-decoration:none;}}
+.section{{margin:20px 0;padding:15px;border:1px solid #0f0;border-radius:5px;}}
+.success{{color:#0f0;}} .error{{color:#f00;}} .warning{{color:#ff0;}}
+</style>
+</head>
+<body>
+<div class="user-info">
+User: {user} | 2FA: ✓ | Auth: {auth_time[:16] if len(auth_time) > 16 else auth_time}
+<a href="/logout" class="logout-btn">Logout</a>
+</div>
+
+<h1>🔧 Secure Gmail Assistant Debug (2FA Protected)</h1>
+
+<div class="section">
+<h2>🔐 Authentication Status</h2>
+<p class="success">✅ Two-Factor Authentication: ACTIVE</p>
+<p class="success">✅ Session Security: ENABLED</p>
+<p>Flask Version: {getattr(Flask, '__version__', 'Unknown')}</p>
+<p>Python Libraries: Gmail API ({'Available' if GMAIL_AVAILABLE else 'Missing'}), OpenAI ({'Available' if OPENAI_AVAILABLE else 'Missing'}), Email ({'Available' if EMAIL_AVAILABLE else 'Missing'})</p>
+<p>Server Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</p>
+<p>Session Timeout: Automatic logout on browser close</p>
+</div>
+
+</body>
+</html>'''
+        
+    except Exception as e:
+        return f'<h1 style="color:red;">Debug Error: {str(e)}</h1>'User: {user}</p>
+<p>Authenticated at: {auth_time}</p>
+<p>Session ID: {session.get('_id', 'N/A')[:8]}...</p>
+</div>
+
+<div class="section">
+<h2>📧 Gmail Integration</h2>
+<p>Gmail Connected: {'<span class="success">✅ Yes</span>' if assistant.gmail_connected else '<span class="error">❌ No</span>'}</p>
+<p>OpenAI Available: {'<span class="success">✅ Yes</span>' if assistant.openai_available else '<span class="error">❌ No</span>'}</p>
+<p>Email Account: 22dcs047@charusat.edu.in</p>
+</div>
+
+<div class="section">
+<h2>🔑 Environment Variables</h2>
+<ul>
+<li>SECRET_KEY: {'<span class="success">✅ Set</span>' if app.secret_key else '<span class="error">❌ Missing</span>'}</li>
+<li>GMAIL_REFRESH_TOKEN: {'<span class="success">✅ Set</span>' if os.getenv('GMAIL_REFRESH_TOKEN') else '<span class="error">❌ Missing</span>'}</li>
+<li>GMAIL_CLIENT_ID: {'<span class="success">✅ Set</span>' if os.getenv('GMAIL_CLIENT_ID') else '<span class="error">❌ Missing</span>'}</li>
+<li>GMAIL_CLIENT_SECRET: {'<span class="success">✅ Set</span>' if os.getenv('GMAIL_CLIENT_SECRET') else '<span class="error">❌ Missing</span>'}</li>
+<li>OPENAI_API_KEY: {'<span class="success">✅ Set</span>' if os.getenv('OPENAI_API_KEY') else '<span class="error">❌ Missing</span>'}</li>
+<li>ADMIN_USERNAME: {'<span class="success">✅ Set</span>' if os.getenv('ADMIN_USERNAME') else '<span class="warning">⚠️ Using default</span>'} ({os.getenv('ADMIN_USERNAME', 'admin')})</li>
+<li>ADMIN_PASSWORD: {'<span class="success">✅ Set</span>' if os.getenv('ADMIN_PASSWORD') else '<span class="warning">⚠️ Using default</span>'}</li>
+<li>SMTP_EMAIL: {'<span class="success">✅ Set</span>' if os.getenv('SMTP_EMAIL') else '<span class="warning">⚠️ Using default</span>'} ({os.getenv('SMTP_EMAIL', '22dcs047@charusat.edu.in')})</li>
+<li>SMTP_PASSWORD: {'<span class="success">✅ Set</span>' if os.getenv('SMTP_PASSWORD') else '<span class="warning">⚠️ Missing (Demo mode)</span>'}</li>
+</ul>
+</div>
+
+<div class="section">
+<h2>🔄 OTP System Status</h2>
+<p>Active OTPs: {len(otp_storage)}</p>
+<p>Cleanup Thread: <span class="success">✅ Running</span></p>
+<p>Email Sending: {'<span class="success">Gmail API</span>' if hasattr(app, 'gmail_service') else '<span class="warning">SMTP/Demo</span>'}</p>
+</div>
+
+<div class="section">
+<h2>🛠️ Quick Actions</h2>
+<p><a href="/dashboard" style="color:#0ff;">← Back to Secure Dashboard</a></p>
+<p><a href="/api/emails" style="color:#0ff;">📧 Test Secure Email API</a></p>
+<p><a href="/" style="color:#0ff;">🏠 Home Page</a></p>
+</div>
+
+<div class="section">
+<h2>📊 System Information</h2>
+<p>from flask import Flask, jsonify, request, session, redirect, url_for, render_template_string
 from datetime import datetime, timedelta
 import json
 import os
@@ -579,12 +747,411 @@ def home():
 </body>
 </html>'''
 
-# [Include all other protected routes from original - dashboard, debug, API endpoints]
+# COMPLETE DASHBOARD ROUTE
 @app.route('/dashboard')
-@login_required  
+@login_required
 def dashboard():
-    # Same dashboard code as original, but now protected by 2FA
-    return '''[Your existing dashboard HTML - now 2FA protected]'''
+    """Complete 2FA-protected dashboard with all functionality"""
+    user = session.get('user', 'User')
+    auth_time = session.get('auth_time', 'Unknown')
+    
+    return '''<!DOCTYPE html>
+<html>
+<head>
+    <title>Gmail Assistant - Secure Dashboard (2FA Protected)</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { 
+            font-family: 'Inter', 'Segoe UI', sans-serif; 
+            background: linear-gradient(135deg, #1e40af 0%, #3b82f6 50%, #06b6d4 100%); 
+            min-height: 100vh; 
+            color: #1f2937; 
+        }
+        .container { max-width: 1400px; margin: 0 auto; padding: 20px; }
+        .user-info {
+            position: absolute; top: 20px; right: 20px;
+            background: rgba(255,255,255,0.1); padding: 15px 25px; border-radius: 25px;
+            backdrop-filter: blur(10px); color: white; display: flex; align-items: center; gap: 15px;
+        }
+        .auth-badge {
+            background: #10b981; padding: 5px 12px; border-radius: 15px;
+            font-size: 0.8rem; font-weight: 600;
+        }
+        .logout-btn {
+            background: #ef4444; color: white; padding: 8px 16px; border: none;
+            border-radius: 20px; text-decoration: none; font-weight: 600;
+            transition: all 0.3s ease;
+        }
+        .logout-btn:hover { background: #dc2626; }
+        .header {
+            background: rgba(255,255,255,0.95); padding: 30px; border-radius: 15px;
+            margin-bottom: 30px; margin-top: 60px; box-shadow: 0 10px 30px rgba(0,0,0,0.1);
+        }
+        .header h1 { font-size: 2.5rem; font-weight: 800; color: #1f2937; margin-bottom: 10px; }
+        .status-indicator {
+            background: linear-gradient(135deg, #059669, #047857); color: white;
+            padding: 8px 20px; border-radius: 20px; font-weight: 600;
+            display: inline-block; font-size: 0.9rem;
+        }
+        .security-status {
+            background: linear-gradient(135deg, #10b981, #059669); color: white;
+            padding: 15px 25px; border-radius: 15px; margin: 15px 0;
+            display: flex; align-items: center; gap: 15px;
+        }
+        .stats-grid {
+            display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 20px; margin-bottom: 40px;
+        }
+        .stat-card {
+            background: rgba(255,255,255,0.95); padding: 30px; border-radius: 15px;
+            text-align: center; transition: all 0.3s ease;
+            box-shadow: 0 5px 20px rgba(0,0,0,0.1);
+            border-left: 4px solid var(--accent-color);
+        }
+        .stat-card:hover { transform: translateY(-5px); box-shadow: 0 15px 35px rgba(0,0,0,0.15); }
+        .stat-number { font-size: 3rem; font-weight: 800; margin-bottom: 10px; color: var(--accent-color); }
+        .stat-label { font-size: 1.1rem; font-weight: 600; color: #4b5563; }
+        .stat-card.total { --accent-color: #3b82f6; }
+        .stat-card.direct { --accent-color: #8b5cf6; }
+        .stat-card.high { --accent-color: #ef4444; }
+        .main-action { text-align: center; margin: 40px 0; }
+        .create-drafts-btn {
+            background: linear-gradient(135deg, #ef4444, #dc2626); color: white;
+            padding: 18px 40px; border: none; border-radius: 12px;
+            font-size: 1.2rem; font-weight: 700; text-decoration: none;
+            display: inline-block; transition: all 0.3s ease;
+            box-shadow: 0 8px 25px rgba(239,68,68,0.3);
+            text-transform: uppercase; letter-spacing: 0.5px; cursor: pointer;
+        }
+        .create-drafts-btn:hover { transform: translateY(-3px); box-shadow: 0 15px 35px rgba(239,68,68,0.4); }
+        .refresh-btn {
+            background: linear-gradient(135deg, #3b82f6, #1e40af); color: white;
+            padding: 10px 20px; border: none; border-radius: 8px;
+            font-weight: 600; cursor: pointer; transition: all 0.3s ease; margin-left: 15px;
+        }
+        .emails-section {
+            background: rgba(255,255,255,0.95); padding: 30px; border-radius: 15px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.1);
+        }
+        .section-title {
+            font-size: 1.8rem; font-weight: 700; margin-bottom: 25px;
+            display: flex; align-items: center; gap: 10px; color: #1f2937;
+        }
+        .email-card {
+            background: #ffffff; margin-bottom: 20px; padding: 25px; border-radius: 12px;
+            border-left: 4px solid var(--priority-color); transition: all 0.3s ease;
+            box-shadow: 0 3px 10px rgba(0,0,0,0.05); cursor: pointer;
+        }
+        .email-card:hover { transform: translateX(5px); box-shadow: 0 8px 25px rgba(0,0,0,0.1); }
+        .email-card.critical { --priority-color: #dc2626; }
+        .email-card.high { --priority-color: #ea580c; }
+        .email-card.medium { --priority-color: #ca8a04; }
+        .email-card.low { --priority-color: #059669; }
+        .email-header {
+            display: flex; justify-content: space-between; align-items: flex-start;
+            margin-bottom: 15px; flex-wrap: wrap; gap: 10px;
+        }
+        .email-subject { font-size: 1.2rem; font-weight: 700; color: #1f2937; flex: 1; min-width: 200px; }
+        .priority-badge {
+            background: var(--priority-color); color: white; padding: 6px 12px; border-radius: 20px;
+            font-weight: 600; font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.5px;
+        }
+        .email-meta {
+            display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 10px; margin-bottom: 15px; color: #6b7280; font-size: 0.9rem;
+        }
+        .meta-item { display: flex; align-items: center; gap: 8px; }
+        .meta-item i { color: var(--priority-color); width: 14px; }
+        .email-snippet {
+            background: #f8fafc; padding: 15px; border-radius: 8px; margin: 15px 0;
+            color: #4b5563; line-height: 1.5; border-left: 3px solid var(--priority-color);
+        }
+        .draft-btn {
+            background: linear-gradient(135deg, var(--priority-color), var(--priority-color));
+            color: white; padding: 10px 20px; border: none; border-radius: 8px;
+            font-weight: 600; cursor: pointer; transition: all 0.3s ease;
+            margin-top: 10px; font-size: 0.9rem;
+        }
+        .draft-btn:hover { transform: translateY(-2px); box-shadow: 0 5px 15px rgba(0,0,0,0.2); }
+        .loading { text-align: center; padding: 40px; color: #6b7280; }
+        .spinner {
+            border: 3px solid #e5e7eb; border-radius: 50%; border-top: 3px solid #3b82f6;
+            width: 40px; height: 40px; animation: spin 1s linear infinite; margin: 20px auto;
+        }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        .notification {
+            position: fixed; top: 20px; right: 20px; background: #10b981;
+            color: white; padding: 15px 25px; border-radius: 10px;
+            box-shadow: 0 10px 25px rgba(0,0,0,0.1); transform: translateX(400px);
+            transition: transform 0.3s ease; z-index: 1000; font-weight: 600;
+        }
+        .notification.show { transform: translateX(0); }
+        .notification.error { background: #ef4444; }
+        @media (max-width: 768px) {
+            .container { padding: 15px; }
+            .header { padding: 20px; margin-top: 40px; }
+            .header h1 { font-size: 2rem; }
+            .stats-grid { grid-template-columns: 1fr; gap: 15px; }
+            .create-drafts-btn { padding: 15px 30px; font-size: 1rem; }
+            .email-header { flex-direction: column; align-items: stretch; }
+            .email-meta { grid-template-columns: 1fr; }
+            .user-info { position: relative; top: 0; right: 0; margin-bottom: 20px; }
+        }
+    </style>
+</head>
+<body>
+    <div class="user-info">
+        <div>
+            <i class="fas fa-shield-alt"></i> ''' + user + '''
+            <div class="auth-badge">2FA ✓</div>
+        </div>
+        <a href="/logout" class="logout-btn"><i class="fas fa-sign-out-alt"></i> Logout</a>
+    </div>
+    
+    <div class="container">
+        <div class="header">
+            <h1><i class="fas fa-shield-alt"></i> Secure Gmail Dashboard</h1>
+            <div class="status-indicator" id="statusIndicator">
+                <i class="fas fa-satellite-dish"></i> Loading status...
+            </div>
+            <div class="security-status">
+                <i class="fas fa-check-shield"></i>
+                <div>
+                    <strong>Maximum Security Active</strong><br>
+                    <small>2FA Authentication completed at: ''' + auth_time + '''</small>
+                </div>
+            </div>
+        </div>
+        
+        <div class="stats-grid">
+            <div class="stat-card total">
+                <div class="stat-number" id="totalEmails">...</div>
+                <div class="stat-label">Total Emails</div>
+            </div>
+            <div class="stat-card direct">
+                <div class="stat-number" id="directEmails">...</div>
+                <div class="stat-label">Direct Emails</div>
+            </div>
+            <div class="stat-card high">
+                <div class="stat-number" id="highPriority">...</div>
+                <div class="stat-label">High Priority</div>
+            </div>
+        </div>
+        
+        <div class="main-action">
+            <button class="create-drafts-btn" onclick="createDraftsForHighPriority()">
+                <i class="fas fa-magic"></i> Create Drafts for High Priority Emails
+            </button>
+        </div>
+        
+        <div class="emails-section">
+            <div class="section-title">
+                <i class="fas fa-inbox"></i>
+                Recent Emails (2FA Protected)
+                <button class="refresh-btn" onclick="refreshEmails()">
+                    <i class="fas fa-sync-alt"></i> Refresh
+                </button>
+            </div>
+            <div id="emailsList" class="loading">
+                <div class="spinner"></div>
+                <p>Loading your secure emails...</p>
+            </div>
+        </div>
+    </div>
+    
+    <div class="notification" id="notification"></div>
+    
+    <script>
+        let emailsData = [];
+        
+        function showNotification(message, type = 'success') {
+            const notification = document.getElementById('notification');
+            notification.textContent = message;
+            notification.className = `notification show ${type}`;
+            setTimeout(() => {
+                notification.classList.remove('show');
+            }, 4000);
+        }
+        
+        async function loadEmails() {
+            try {
+                console.log('🔄 Loading secure emails...');
+                const response = await fetch('/api/emails');
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                
+                const data = await response.json();
+                console.log('📊 Secure email data received:', data);
+                
+                emailsData = data.all_emails || [];
+                
+                // Update stats safely
+                document.getElementById('totalEmails').textContent = data.stats?.total_unread || 0;
+                document.getElementById('directEmails').textContent = data.stats?.direct_count || 0;
+                document.getElementById('highPriority').textContent = data.stats?.high_priority_count || 0;
+                
+                // Update status
+                const statusEl = document.getElementById('statusIndicator');
+                if (data.gmail_connected) {
+                    statusEl.innerHTML = '<i class="fas fa-satellite-dish"></i> Gmail Connected - Live Data (2FA Secured)';
+                    statusEl.style.background = 'linear-gradient(135deg, #059669, #047857)';
+                } else {
+                    statusEl.innerHTML = '<i class="fas fa-chart-line"></i> Demo Mode - Sample Data (2FA Secured)';
+                    statusEl.style.background = 'linear-gradient(135deg, #3b82f6, #1e40af)';
+                }
+                
+                // Display emails
+                displayEmails(emailsData);
+                
+            } catch (error) {
+                console.error('❌ Error loading emails:', error);
+                document.getElementById('emailsList').innerHTML = 
+                    `<div style="text-align: center; padding: 40px; color: #6b7280;">
+                        <i class="fas fa-exclamation-circle"></i>
+                        <h3>Error loading emails</h3>
+                        <p>${error.message}</p>
+                        <button onclick="refreshEmails()" style="margin-top: 15px; padding: 10px 20px; background: #3b82f6; color: white; border: none; border-radius: 8px; cursor: pointer;">
+                            <i class="fas fa-retry"></i> Try Again
+                        </button>
+                    </div>`;
+                showNotification('Failed to load emails', 'error');
+            }
+        }
+        
+        function displayEmails(emails) {
+            const emailsList = document.getElementById('emailsList');
+            
+            if (!emails || emails.length === 0) {
+                emailsList.innerHTML = 
+                    `<div style="text-align: center; padding: 40px; color: #6b7280;">
+                        <i class="fas fa-inbox"></i>
+                        <h3>No unread emails</h3>
+                        <p>Your inbox is clean and secure!</p>
+                    </div>`;
+                return;
+            }
+            
+            console.log(`📧 Displaying ${emails.length} secure emails`);
+            
+            emailsList.innerHTML = emails.map(email => `
+                <div class="email-card ${email.priority || 'low'}">
+                    <div class="email-header">
+                        <div class="email-subject">${email.subject || 'No Subject'}</div>
+                        <div class="priority-badge">${(email.priority || 'LOW').toUpperCase()}</div>
+                    </div>
+                    <div class="email-meta">
+                        <div class="meta-item">
+                            <i class="fas fa-user"></i>
+                            <span>${email.from_email || 'Unknown'}</span>
+                        </div>
+                        <div class="meta-item">
+                            <i class="fas fa-calendar"></i>
+                            <span>${email.date || 'Unknown'}</span>
+                        </div>
+                        <div class="meta-item">
+                            <i class="fas fa-clock"></i>
+                            <span>${email.time || 'Unknown'}</span>
+                        </div>
+                        <div class="meta-item">
+                            <i class="fas fa-tag"></i>
+                            <span>${email.email_type || 'general'}</span>
+                        </div>
+                    </div>
+                    <div class="email-snippet">${email.display_snippet || email.snippet || 'No preview available'}</div>
+                    ${email.urgency_reason ? `<div style="background: #fef3c7; padding: 8px 12px; border-radius: 6px; margin: 10px 0; font-size: 0.85rem; color: #92400e;"><strong>Why ${email.priority || 'classified'}:</strong> ${email.urgency_reason}</div>` : ''}
+                    ${(email.priority === 'high' || email.priority === 'critical') ? 
+                        `<button class="draft-btn" onclick="createDraft('${email.id}')">
+                            <i class="fas fa-pen"></i> Create Draft Reply
+                        </button>` : ''
+                    }
+                </div>
+            `).join('');
+        }
+        
+        async function createDraft(emailId) {
+            try {
+                const email = emailsData.find(e => e.id === emailId);
+                if (!email) {
+                    showNotification('Email not found', 'error');
+                    return;
+                }
+                
+                showNotification('Creating secure draft...', 'info');
+                
+                const response = await fetch('/api/create-draft', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ email_id: emailId })
+                });
+                
+                const result = await response.json();
+                
+                if (result.success) {
+                    showNotification('✅ Secure draft created successfully!', 'success');
+                } else {
+                    showNotification(`❌ Error: ${result.message}`, 'error');
+                }
+                
+            } catch (error) {
+                console.error('❌ Error creating draft:', error);
+                showNotification('❌ Failed to create draft', 'error');
+            }
+        }
+        
+        async function createDraftsForHighPriority() {
+            try {
+                const highPriorityEmails = emailsData.filter(email => 
+                    email.priority === 'high' || email.priority === 'critical'
+                );
+                
+                if (highPriorityEmails.length === 0) {
+                    showNotification('No high priority emails found', 'info');
+                    return;
+                }
+                
+                showNotification(`Creating ${highPriorityEmails.length} secure drafts...`, 'info');
+                
+                const response = await fetch('/api/create-drafts-bulk', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ email_ids: highPriorityEmails.map(e => e.id) })
+                });
+                
+                const result = await response.json();
+                
+                if (result.success) {
+                    showNotification(`✅ Created ${result.created_count} secure drafts!`, 'success');
+                } else {
+                    showNotification(`❌ Error: ${result.message}`, 'error');
+                }
+                
+            } catch (error) {
+                console.error('❌ Error creating bulk drafts:', error);
+                showNotification('❌ Failed to create drafts', 'error');
+            }
+        }
+        
+        function refreshEmails() {
+            document.getElementById('emailsList').innerHTML = 
+                '<div class="loading"><div class="spinner"></div><p>Refreshing secure emails...</p></div>';
+            loadEmails();
+        }
+        
+        // Load emails on page load
+        document.addEventListener('DOMContentLoaded', function() {
+            console.log('🚀 Secure 2FA dashboard loaded, initializing...');
+            loadEmails();
+        });
+        
+        // Auto-refresh every 3 minutes
+        setInterval(loadEmails, 180000);
+    </script>
+</body>
+</html>'''
 
 @app.route('/api/emails')
 @login_required
